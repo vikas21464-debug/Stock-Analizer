@@ -1,6 +1,6 @@
 # ============================================================
 # SINGLE STOCK BREAKOUT & MONTHLY VALUATION ANALYZER
-# Streamlit Web Version
+# Streamlit Web Version (with Index support)
 # ============================================================
 
 import streamlit as st
@@ -160,7 +160,7 @@ def plot_candlestick_chart(ohlc, ticker, as_of_label, dma_lines=None, car_series
         fontsize=13,
         fontweight="bold",
     )
-    ax.set_ylabel("Price (₹)")
+    ax.set_ylabel("Price")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
     fig.autofmt_xdate()
@@ -176,7 +176,7 @@ def plot_candlestick_chart(ohlc, ticker, as_of_label, dma_lines=None, car_series
 
 
 # ------------------------------------------------------------
-# Core Analysis Function (unchanged logic)
+# Core Analysis Function
 # ------------------------------------------------------------
 def analyze_stock(ticker, as_of_date=None):
     if as_of_date is None:
@@ -198,7 +198,7 @@ def analyze_stock(ticker, as_of_date=None):
     )
 
     if data.empty:
-        return None, "No data found for this stock."
+        return None, "No data found for this stock/index."
 
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
@@ -327,16 +327,16 @@ def analyze_stock(ticker, as_of_date=None):
 # Streamlit UI
 # ------------------------------------------------------------
 st.title("📈 Single Stock Breakout & Monthly Valuation Analyzer")
-st.caption("Historical as-of date support • 1Y candlestick + CAR + DMAs")
+st.caption("Supports Stocks + Indices (Nifty 50, Bank Nifty, Sensex etc.)")
 
 col1, col2, col3 = st.columns([2, 2, 1])
 
 with col1:
     stock_input = st.text_input(
-        "Stock Ticker (NSE)",
+        "Stock / Index Ticker",
         value="RELIANCE",
-        placeholder="e.g. RELIANCE, TCS, INFY",
-        help="Just type the name. .NS will be added automatically.",
+        placeholder="e.g. RELIANCE, TCS, ^NSEI, ^NSEBANK",
+        help="For stocks just type name. For indices use ^NSEI, ^NSEBANK, ^BSESN",
     )
 
 with col2:
@@ -348,18 +348,21 @@ with col2:
     )
 
 with col3:
-    st.write("")  # spacing
     st.write("")
-    analyze_btn = st.button("🔍 Analyze Stock", type="primary", use_container_width=True)
+    st.write("")
+    analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
 
 st.divider()
 
 if analyze_btn:
     ticker = stock_input.strip().upper()
+
     if not ticker:
-        st.error("Please enter a stock name.")
+        st.error("Please enter a stock or index name.")
     else:
-        if not ticker.endswith(".NS"):
+        # ---- FIXED LOGIC ----
+        # Only add .NS if it is NOT an index (does not start with ^)
+        if not ticker.startswith("^") and not ticker.endswith(".NS"):
             ticker = ticker + ".NS"
 
         with st.spinner(f"Analyzing {ticker} as of {as_of.strftime('%d-%m-%Y')} ..."):
@@ -375,7 +378,6 @@ if analyze_btn:
                     f"Using session {result['Date']}."
                 )
 
-            # ---------- Results ----------
             if result["mode"] == "valuation_only":
                 st.subheader("📊 Valuation Signal")
                 st.info(
@@ -387,7 +389,7 @@ if analyze_btn:
 
                 c1, c2, c3 = st.columns(3)
                 c1.metric("As-of Session", result["Date"])
-                c2.metric("Stock", result["Stock"])
+                c2.metric("Symbol", result["Stock"])
                 c3.metric("Valuation Signal", result["Valuation Signal"])
 
                 st.write(f"**Current CMP / 124 DMA:** {result['Current CMP / 124 DMA']:.4f}")
@@ -400,18 +402,16 @@ if analyze_btn:
                     f"| Trading days used: {result['Trading Days Used']}"
                 )
             else:
-                st.subheader("📊 Stock Analysis Result")
+                st.subheader("📊 Analysis Result")
                 if session_note:
                     st.info(session_note)
 
-                # Metrics row
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("CMP", f"₹{result['CMP']:.2f}")
+                m1.metric("CMP", f"{result['CMP']:.2f}")
                 m2.metric("Valuation Signal", result["Valuation Signal"])
                 m3.metric("CAR Status", result["CAR Status"])
                 m4.metric("Action", result["Action"])
 
-                # Detailed table
                 st.markdown("#### Key Levels")
                 details = {
                     "Metric": [
@@ -428,10 +428,10 @@ if analyze_btn:
                     ],
                     "Value": [
                         result["Date"],
-                        f"₹{result['30 DMA']:.2f}",
-                        f"₹{result['50 DMA']:.2f}",
-                        f"₹{result['124 DMA']:.2f}",
-                        f"₹{result['200 DMA']:.2f}",
+                        f"{result['30 DMA']:.2f}",
+                        f"{result['50 DMA']:.2f}",
+                        f"{result['124 DMA']:.2f}",
+                        f"{result['200 DMA']:.2f}",
                         f"{result['Current CMP / 124 DMA']:.4f}",
                         f"{result['Previous Month Avg CMP / 124 DMA']:.4f}",
                         f"{result['200 DMA Dist %']:.2f}%",
@@ -443,11 +443,10 @@ if analyze_btn:
 
                 st.caption(
                     "📌 Valuation Signal is based on the average of every trading day's "
-                    "CMP / 124 DMA from the **previous month** relative to the as-of date.  \n"
-                    "📌 All DMAs, CAR and the breakout check use only data available on or before that date."
+                    "CMP / 124 DMA from the **previous month** relative to the as-of date."
                 )
 
-            # ---------- Chart ----------
+            # Chart
             st.markdown("### 📈 1-Year Daily Candlestick Chart")
             st.caption(
                 "Black line = CAR (expanding average of closes from 52-week high). "
@@ -462,6 +461,5 @@ if analyze_btn:
                 high_date=result.get("high_date"),
             )
 
-# Footer
 st.divider()
-st.caption("Built with the same logic as your original Colab notebook • Data via Yahoo Finance")
+st.caption("Supports Stocks + Indices • Data via Yahoo Finance")
