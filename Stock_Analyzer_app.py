@@ -1,5 +1,5 @@
 # ============================================================
-# SINGLE STOCK BREAKOUT & MONTHLY VALUATION ANALYZER
+# STOCK BREAKOUT & MONTHLY VALUATION ANALYZER
 # Streamlit Web Version (with Index support)
 # ============================================================
 
