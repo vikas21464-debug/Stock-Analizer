@@ -1,6 +1,8 @@
 # ============================================================
 # SINGLE STOCK BREAKOUT & MONTHLY VALUATION ANALYZER
-# Streamlit Web Version (with Index support + Signal on Chart)
+# Streamlit Web Version
+# - Index support
+# - Historical Buy/Sell signals under every candle
 # ============================================================
 
 import streamlit as st
@@ -18,13 +20,13 @@ warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 st.set_page_config(
-    page_title="Stock Breakout & Valuation Analyzer by Vikas Dhiman",
+    page_title="Stock Breakout & Monthly Valuation Analyzer by Vikas Dhiman",
     page_icon="📈",
     layout="wide",
 )
 
 # ------------------------------------------------------------
-# Valuation Signal (exact same formula)
+# Valuation Signal
 # ------------------------------------------------------------
 def get_valuation_signal(ratio):
     if ratio <= 0.55:
@@ -52,7 +54,7 @@ def get_valuation_signal(ratio):
 
 
 # ------------------------------------------------------------
-# Candlestick Chart (now shows Buy/Sell signal)
+# Candlestick Chart with historical Buy/Sell markers
 # ------------------------------------------------------------
 def plot_candlestick_chart(
     ohlc,
@@ -61,7 +63,7 @@ def plot_candlestick_chart(
     dma_lines=None,
     car_series=None,
     high_date=None,
-    valuation_signal=None,
+    signal_series=None,
 ):
     if ohlc is None or ohlc.empty:
         st.warning("Not enough data to draw the candlestick chart.")
@@ -86,6 +88,7 @@ def plot_candlestick_chart(
     else:
         width = 0.6
 
+    # Candles
     for i, dt in enumerate(dates):
         x = mdates.date2num(dt)
         o, h, l, c = opens[i], highs[i], lows[i], closes[i]
@@ -108,6 +111,7 @@ def plot_candlestick_chart(
             )
         )
 
+    # DMAs
     if dma_lines:
         styles = {
             "30 DMA": ("#1976d2", 1.2),
@@ -162,29 +166,30 @@ def plot_candlestick_chart(
         except Exception:
             pass
 
-    # ---------- NEW: Show only BUY / SELL on chart ----------
-    if valuation_signal and valuation_signal != "HOLD":
-        is_buy = "BUY" in valuation_signal.upper()
-        box_color = "#2e7d32" if is_buy else "#c62828"   # Green for BUY, Red for Sell
-        text_color = "white"
+    # ---------- Historical Buy / Sell markers under candles ----------
+    if signal_series is not None and not signal_series.empty:
+        buy_x, buy_y = [], []
+        sell_x, sell_y = [], []
 
-        ax.text(
-            0.98, 0.97,
-            f"Valuation: {valuation_signal}",
-            transform=ax.transAxes,
-            fontsize=13,
-            fontweight="bold",
-            color=text_color,
-            ha="right",
-            va="top",
-            bbox=dict(
-                boxstyle="round,pad=0.45",
-                facecolor=box_color,
-                edgecolor=box_color,
-                alpha=0.92,
-            ),
-            zorder=10,
-        )
+        for i, dt in enumerate(dates):
+            sig = signal_series.get(dt, "HOLD")
+            if sig == "HOLD" or pd.isna(sig):
+                continue
+
+            x = mdates.date2num(dt)
+            y = lows[i] * 0.987          # slightly below the candle low
+
+            if "BUY" in str(sig).upper():
+                buy_x.append(x)
+                buy_y.append(y)
+            elif "SELL" in str(sig).upper():
+                sell_x.append(x)
+                sell_y.append(y)
+
+        if buy_x:
+            ax.scatter(buy_x, buy_y, marker="^", color="#2e7d32", s=38, zorder=6, label="BUY Signal")
+        if sell_x:
+            ax.scatter(sell_x, sell_y, marker="v", color="#c62828", s=38, zorder=6, label="SELL Signal")
 
     ax.legend(loc="upper left", fontsize=9)
     ax.set_title(
@@ -245,7 +250,6 @@ def analyze_stock(ticker, as_of_date=None):
         return None, "Not enough historical data to calculate 200 DMA as of the selected date."
 
     close_prices = data["Close"].squeeze()
-
     if close_prices.empty:
         return None, "No closing-price data available."
 
@@ -270,6 +274,7 @@ def analyze_stock(ticker, as_of_date=None):
         "200 DMA": dma_200_series.reindex(chart_ohlc.index),
     }
 
+    # ---------- Current Valuation Signal (same as before) ----------
     current_year = as_of_session.year
     current_month = as_of_session.month
 
@@ -281,6 +286,7 @@ def analyze_stock(ticker, as_of_date=None):
         previous_month = current_month - 1
 
     daily_ratio = close_prices / dma_124_series
+
     previous_month_mask = (
         (daily_ratio.index.year == previous_year)
         & (daily_ratio.index.month == previous_month)
@@ -293,6 +299,32 @@ def analyze_stock(ticker, as_of_date=None):
     monthly_average_ratio = float(previous_month_ratios.mean())
     valuation_signal = get_valuation_signal(monthly_average_ratio)
 
+    # ---------- Historical signal for every day (for the chart) ----------
+    signal_series = pd.Series(index=close_prices.index, dtype=object)
+
+    for dt in close_prices.index:
+        yr = dt.year
+        mo = dt.month
+        if mo == 1:
+            prev_yr = yr - 1
+            prev_mo = 12
+        else:
+            prev_yr = yr
+            prev_mo = mo - 1
+
+        mask = (daily_ratio.index.year == prev_yr) & (daily_ratio.index.month == prev_mo)
+        prev_ratios = daily_ratio.loc[mask].dropna()
+
+        if len(prev_ratios) >= 5:          # need at least a few days
+            avg = float(prev_ratios.mean())
+            signal_series.loc[dt] = get_valuation_signal(avg)
+        else:
+            signal_series.loc[dt] = "HOLD"
+
+    # Align to chart period
+    chart_signals = signal_series.reindex(chart_ohlc.index)
+
+    # CAR
     last_1y_data = data.tail(252)
     high_series = last_1y_data["High"].squeeze()
     high_date = high_series.idxmax()
@@ -315,6 +347,7 @@ def analyze_stock(ticker, as_of_date=None):
             "chart_dmas": chart_dmas,
             "chart_car": car_series,
             "high_date": high_date,
+            "chart_signals": chart_signals,
         }, None
 
     last_10_car = car_series.tail(10)
@@ -352,6 +385,7 @@ def analyze_stock(ticker, as_of_date=None):
         "chart_dmas": chart_dmas,
         "chart_car": car_series,
         "high_date": high_date,
+        "chart_signals": chart_signals,
     }, None
 
 
@@ -359,7 +393,7 @@ def analyze_stock(ticker, as_of_date=None):
 # Streamlit UI
 # ------------------------------------------------------------
 st.title("📈 Stock Breakout & Monthly Valuation Analyzer by Vikas Dhiman")
-st.caption("Supports Stocks + Indices (Nifty 50, Bank Nifty, Sensex etc.)")
+st.caption("Supports Stocks + Indices • Historical Buy/Sell signals under candles")
 
 col1, col2, col3 = st.columns([2, 2, 1])
 
@@ -392,7 +426,6 @@ if analyze_btn:
     if not ticker:
         st.error("Please enter a stock or index name.")
     else:
-        # Only add .NS if it is NOT an index
         if not ticker.startswith("^") and not ticker.endswith(".NS"):
             ticker = ticker + ".NS"
 
@@ -477,11 +510,10 @@ if analyze_btn:
                     "CMP / 124 DMA from the **previous month** relative to the as-of date."
                 )
 
-            # Chart (now with signal)
+            # Chart
             st.markdown("### 📈 1-Year Daily Candlestick Chart")
             st.caption(
-                "Black line = CAR • Dashed line = 52W High • "
-                "Green/Red box = Valuation Signal (only BUY / SELL shown)"
+                "Green ▲ = BUY signal day • Red ▼ = SELL signal day • No marker = HOLD"
             )
             plot_candlestick_chart(
                 result.get("chart_ohlc"),
@@ -490,8 +522,8 @@ if analyze_btn:
                 dma_lines=result.get("chart_dmas"),
                 car_series=result.get("chart_car"),
                 high_date=result.get("high_date"),
-                valuation_signal=result.get("Valuation Signal"),
+                signal_series=result.get("chart_signals"),
             )
 
 st.divider()
-st.caption("Supports Stocks + Indices • Buy/Sell signals shown on chart • Data via Yahoo Finance")
+st.caption("Supports Stocks + Indices • Historical Buy/Sell signals under candles • Data via Yahoo Finance")
