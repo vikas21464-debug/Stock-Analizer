@@ -358,7 +358,7 @@ def analyze_stock(ticker, as_of_date=None):
 # ------------------------------------------------------------
 # Streamlit UI
 # ------------------------------------------------------------
-st.title("📈 Single Stock Breakout & Monthly Valuation Analyzer")
+st.title("📈 Stock Breakout & Monthly Valuation Analyzer by Vikas Dhiman")
 st.caption("Supports Stocks + Indices (Nifty 50, Bank Nifty, Sensex etc.)")
 
 col1, col2, col3 = st.columns([2, 2, 1])
