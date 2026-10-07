@@ -2,7 +2,7 @@
 # SINGLE STOCK BREAKOUT & MONTHLY VALUATION ANALYZER
 # Streamlit Web Version
 # - Index support
-# - Historical Buy/Sell signals under every candle
+# - Historical Buy/Sell signals on the first trading day of each month
 # ============================================================
 
 import streamlit as st
@@ -166,7 +166,7 @@ def plot_candlestick_chart(
         except Exception:
             pass
 
-    # ---------- Historical Buy / Sell markers under candles ----------
+    # ---------- Historical Buy / Sell markers on the first trading day of each month ----------
     if signal_series is not None and not signal_series.empty:
         buy_x, buy_y = [], []
         sell_x, sell_y = [], []
@@ -187,9 +187,9 @@ def plot_candlestick_chart(
                 sell_y.append(y)
 
         if buy_x:
-            ax.scatter(buy_x, buy_y, marker="^", color="#2e7d32", s=38, zorder=6, label="BUY Signal")
+            ax.scatter(buy_x, buy_y, marker="^", color="#2e7d32", s=50, zorder=6, label="Monthly Valuation BUY Signal")
         if sell_x:
-            ax.scatter(sell_x, sell_y, marker="v", color="#c62828", s=38, zorder=6, label="SELL Signal")
+            ax.scatter(sell_x, sell_y, marker="v", color="#c62828", s=50, zorder=6, label="Monthly Valuation SELL Signal")
 
     ax.legend(loc="upper left", fontsize=9)
     ax.set_title(
@@ -274,7 +274,7 @@ def analyze_stock(ticker, as_of_date=None):
         "200 DMA": dma_200_series.reindex(chart_ohlc.index),
     }
 
-    # ---------- Current Valuation Signal (same as before) ----------
+    # ---------- Current Valuation Signal ----------
     current_year = as_of_session.year
     current_month = as_of_session.month
 
@@ -299,10 +299,17 @@ def analyze_stock(ticker, as_of_date=None):
     monthly_average_ratio = float(previous_month_ratios.mean())
     valuation_signal = get_valuation_signal(monthly_average_ratio)
 
-    # ---------- Historical signal for every day (for the chart) ----------
+    # ---------- Historical signal restricted strictly to the first trading day of each month ----------
     signal_series = pd.Series(index=close_prices.index, dtype=object)
+    signal_series[:] = "HOLD"
 
-    for dt in close_prices.index:
+    temp_df = pd.DataFrame({'ratio': daily_ratio})
+    temp_df['Year'] = temp_df.index.year
+    temp_df['Month'] = temp_df.index.month
+
+    first_days_of_months = temp_df.groupby(['Year', 'Month']).head(1).index
+
+    for dt in first_days_of_months:
         yr = dt.year
         mo = dt.month
         if mo == 1:
@@ -315,11 +322,9 @@ def analyze_stock(ticker, as_of_date=None):
         mask = (daily_ratio.index.year == prev_yr) & (daily_ratio.index.month == prev_mo)
         prev_ratios = daily_ratio.loc[mask].dropna()
 
-        if len(prev_ratios) >= 5:          # need at least a few days
+        if len(prev_ratios) >= 5:
             avg = float(prev_ratios.mean())
             signal_series.loc[dt] = get_valuation_signal(avg)
-        else:
-            signal_series.loc[dt] = "HOLD"
 
     # Align to chart period
     chart_signals = signal_series.reindex(chart_ohlc.index)
@@ -393,7 +398,7 @@ def analyze_stock(ticker, as_of_date=None):
 # Streamlit UI
 # ------------------------------------------------------------
 st.title("📈 Stock Breakout & Monthly Valuation Analyzer by Vikas Dhiman")
-st.caption("Supports Stocks + Indices • Historical Buy/Sell signals under candles")
+st.caption("Supports Stocks + Indices • Monthly Valuation signals plotted on the first trading day of each month")
 
 col1, col2, col3 = st.columns([2, 2, 1])
 
@@ -513,7 +518,7 @@ if analyze_btn:
             # Chart
             st.markdown("### 📈 1-Year Daily Candlestick Chart")
             st.caption(
-                "Green ▲ = BUY signal day • Red ▼ = SELL signal day • No marker = HOLD"
+                "Green ▲ = Monthly Valuation BUY Signal (first trading day of month) • Red ▼ = SELL Signal • Other days have no markers"
             )
             plot_candlestick_chart(
                 result.get("chart_ohlc"),
@@ -526,4 +531,4 @@ if analyze_btn:
             )
 
 st.divider()
-st.caption("Supports Stocks + Indices • Historical Buy/Sell signals under candles • Data via Yahoo Finance")
+st.caption("Supports Stocks + Indices • Monthly Valuation signals on first trading day • Data via Yahoo Finance")
