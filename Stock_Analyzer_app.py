@@ -2,7 +2,7 @@
 # SINGLE STOCK BREAKOUT & MONTHLY VALUATION ANALYZER
 # Streamlit Web Version
 # - Index support
-# - Historical Buy/Sell signals on the first trading day of each month
+# - Monthly Valuation Signal only on 1st trading day of each month
 # ============================================================
 
 import streamlit as st
@@ -54,7 +54,7 @@ def get_valuation_signal(ratio):
 
 
 # ------------------------------------------------------------
-# Candlestick Chart with historical Buy/Sell markers
+# Candlestick Chart
 # ------------------------------------------------------------
 def plot_candlestick_chart(
     ohlc,
@@ -166,18 +166,18 @@ def plot_candlestick_chart(
         except Exception:
             pass
 
-    # ---------- Historical Buy / Sell markers on the first trading day of each month ----------
+    # ---------- Monthly Buy / Sell markers (only on 1st trading day) ----------
     if signal_series is not None and not signal_series.empty:
         buy_x, buy_y = [], []
         sell_x, sell_y = [], []
 
         for i, dt in enumerate(dates):
-            sig = signal_series.get(dt, "HOLD")
-            if sig == "HOLD" or pd.isna(sig):
+            sig = signal_series.get(dt)
+            if sig is None or pd.isna(sig) or sig == "HOLD":
                 continue
 
             x = mdates.date2num(dt)
-            y = lows[i] * 0.987          # slightly below the candle low
+            y = lows[i] * 0.985
 
             if "BUY" in str(sig).upper():
                 buy_x.append(x)
@@ -187,9 +187,9 @@ def plot_candlestick_chart(
                 sell_y.append(y)
 
         if buy_x:
-            ax.scatter(buy_x, buy_y, marker="^", color="#2e7d32", s=50, zorder=6, label="Monthly Valuation BUY Signal")
+            ax.scatter(buy_x, buy_y, marker="^", color="#2e7d32", s=55, zorder=6, label="BUY Signal")
         if sell_x:
-            ax.scatter(sell_x, sell_y, marker="v", color="#c62828", s=50, zorder=6, label="Monthly Valuation SELL Signal")
+            ax.scatter(sell_x, sell_y, marker="v", color="#c62828", s=55, zorder=6, label="SELL Signal")
 
     ax.legend(loc="upper left", fontsize=9)
     ax.set_title(
@@ -274,6 +274,8 @@ def analyze_stock(ticker, as_of_date=None):
         "200 DMA": dma_200_series.reindex(chart_ohlc.index),
     }
 
+    daily_ratio = close_prices / dma_124_series
+
     # ---------- Current Valuation Signal ----------
     current_year = as_of_session.year
     current_month = as_of_session.month
@@ -284,8 +286,6 @@ def analyze_stock(ticker, as_of_date=None):
     else:
         previous_year = current_year
         previous_month = current_month - 1
-
-    daily_ratio = close_prices / dma_124_series
 
     previous_month_mask = (
         (daily_ratio.index.year == previous_year)
@@ -299,19 +299,16 @@ def analyze_stock(ticker, as_of_date=None):
     monthly_average_ratio = float(previous_month_ratios.mean())
     valuation_signal = get_valuation_signal(monthly_average_ratio)
 
-    # ---------- Historical signal restricted strictly to the first trading day of each month ----------
+    # ---------- Monthly signals only on 1st trading day of each month ----------
     signal_series = pd.Series(index=close_prices.index, dtype=object)
-    signal_series[:] = "HOLD"
 
-    temp_df = pd.DataFrame({'ratio': daily_ratio})
-    temp_df['Year'] = temp_df.index.year
-    temp_df['Month'] = temp_df.index.month
+    # Group by year-month and take the first trading day of each month
+    monthly_groups = close_prices.groupby([close_prices.index.year, close_prices.index.month])
 
-    first_days_of_months = temp_df.groupby(['Year', 'Month']).head(1).index
+    for (yr, mo), group in monthly_groups:
+        first_day = group.index[0]          # first trading day of the month
 
-    for dt in first_days_of_months:
-        yr = dt.year
-        mo = dt.month
+        # Signal for this month is based on the *previous* month
         if mo == 1:
             prev_yr = yr - 1
             prev_mo = 12
@@ -324,7 +321,12 @@ def analyze_stock(ticker, as_of_date=None):
 
         if len(prev_ratios) >= 5:
             avg = float(prev_ratios.mean())
-            signal_series.loc[dt] = get_valuation_signal(avg)
+            sig = get_valuation_signal(avg)
+        else:
+            sig = "HOLD"
+
+        # Store signal only on the first trading day
+        signal_series.loc[first_day] = sig
 
     # Align to chart period
     chart_signals = signal_series.reindex(chart_ohlc.index)
@@ -398,7 +400,7 @@ def analyze_stock(ticker, as_of_date=None):
 # Streamlit UI
 # ------------------------------------------------------------
 st.title("📈 Stock Breakout & Monthly Valuation Analyzer by Vikas Dhiman")
-st.caption("Supports Stocks + Indices • Monthly Valuation signals plotted on the first trading day of each month")
+st.caption("Supports Stocks + Indices • Monthly Buy/Sell signals on 1st trading day of each month")
 
 col1, col2, col3 = st.columns([2, 2, 1])
 
@@ -518,7 +520,7 @@ if analyze_btn:
             # Chart
             st.markdown("### 📈 1-Year Daily Candlestick Chart")
             st.caption(
-                "Green ▲ = Monthly Valuation BUY Signal (first trading day of month) • Red ▼ = SELL Signal • Other days have no markers"
+                "Green ▲ = BUY signal • Red ▼ = SELL signal • Shown only on the 1st trading day of each month"
             )
             plot_candlestick_chart(
                 result.get("chart_ohlc"),
@@ -531,4 +533,4 @@ if analyze_btn:
             )
 
 st.divider()
-st.caption("Supports Stocks + Indices • Monthly Valuation signals on first trading day • Data via Yahoo Finance")
+st.caption("Supports Stocks + Indices • Monthly Buy/Sell signals on 1st trading day • Data via Yahoo Finance")
