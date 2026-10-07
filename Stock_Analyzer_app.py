@@ -17,23 +17,68 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 st.set_page_config(page_title="Breakout & Valuation Analyzer", page_icon="📈", layout="wide")
 
-UP, DOWN, INK, MUTED = "#0f9d8a", "#e0475b", "#13293d", "#6b7c8f"
+# ------------------------------------------------------------
+# Theme (Auto follows Streamlit's own theme; can be overridden)
+# ------------------------------------------------------------
+LIGHT = dict(
+    mode="light", bg="#ffffff", side="#f4f7fa", card="#ffffff", border="#e3e9ef",
+    ink="#13293d", muted="#6b7c8f", up="#0f9d8a", down="#e0475b",
+    hero1="#13293d", hero2="#1f4b63", hero_sub="#bcd0de",
+    dma={30: "#1976d2", 50: "#f9a825", 124: "#8e24aa", 200: "#e65100"}, car="#111111",
+    buy_bg="#d9f3ee", buy_fg="#0a6b5d", sell_bg="#fde1e5", sell_fg="#a3243a", hold_bg="#e9eef3", hold_fg="#41566b",
+    g_buy="#cfeee8", g_hold="#eef2f6", g_sell="#fbd9de", mk_buy="#2e7d32", mk_sell="#c62828", grid="#e8edf2",
+)
+DARK = dict(
+    mode="dark", bg="#0e1621", side="#131e2b", card="#162232", border="#263548",
+    ink="#e6edf5", muted="#8fa3b8", up="#26c6a2", down="#ff6b7f",
+    hero1="#0b2a3d", hero2="#14566e", hero_sub="#a9c4d6",
+    dma={30: "#64b5f6", 50: "#ffd54f", 124: "#ce93d8", 200: "#ff9e5e"}, car="#ffffff",
+    buy_bg="#0f3d36", buy_fg="#5eead4", sell_bg="#4a1a24", sell_fg="#ff9aa9", hold_bg="#233447", hold_fg="#b6c7d8",
+    g_buy="#12453d", g_hold="#1f2e3f", g_sell="#4d1f2a", mk_buy="#4ade80", mk_sell="#ff6b7f", grid="#22324a",
+)
+
+
+def detect_theme():
+    try:
+        t = st.context.theme.type          # Streamlit >= 1.46
+        if t in ("light", "dark"):
+            return t
+    except Exception:
+        pass
+    return st.get_option("theme.base") or "light"
+
+
+with st.sidebar:
+    theme_pref = st.radio("Appearance", ["Auto", "Light", "Dark"], horizontal=True,
+                          help="Auto follows the Streamlit theme (menu ⋮ → Settings).")
+mode = detect_theme() if theme_pref == "Auto" else theme_pref.lower()
+P = DARK if mode == "dark" else LIGHT
+UP, DOWN, INK, MUTED = P["up"], P["down"], P["ink"], P["muted"]
+
+force_bg = f"""
+.stApp, [data-testid="stHeader"] {{ background: {P['bg']}; color: {P['ink']}; }}
+[data-testid="stSidebar"] {{ background: {P['side']}; }}
+.stApp p, .stApp label, .stApp span, .stApp li, .stApp [data-testid="stMarkdownContainer"] {{ color: {P['ink']}; }}
+.stApp [data-testid="stCaptionContainer"], .stApp small {{ color: {P['muted']}; }}
+""" if theme_pref != "Auto" else ""
 
 st.markdown(f"""
 <style>
+{force_bg}
 .block-container {{ padding-top: 1.6rem; max-width: 1400px; }}
-h1, h2, h3 {{ color: {INK}; letter-spacing: -0.01em; }}
-.hero {{ background: linear-gradient(120deg, {INK} 0%, #1f4b63 100%); color: #fff;
-        padding: 22px 28px; border-radius: 14px; margin-bottom: 18px; }}
+h1, h2, h3 {{ color: {P['ink']}; letter-spacing: -0.01em; }}
+.hero {{ background: linear-gradient(120deg, {P['hero1']} 0%, {P['hero2']} 100%); color: #fff;
+        padding: 22px 28px; border-radius: 14px; margin-bottom: 18px; border: 1px solid {P['border']}; }}
 .hero h1 {{ color: #fff; margin: 0; font-size: 1.7rem; }}
-.hero p {{ margin: 4px 0 0; color: #bcd0de; font-size: .95rem; }}
-.kpi {{ background: #fff; border: 1px solid #e3e9ef; border-radius: 12px; padding: 14px 16px; height: 100%; }}
-.kpi .l {{ color: {MUTED}; font-size: .78rem; }}
-.kpi .v {{ color: {INK}; font-size: 1.45rem; font-weight: 700; margin-top: 2px; }}
-.kpi .s {{ font-size: .8rem; margin-top: 2px; color: {MUTED}; }}
+.hero p {{ margin: 4px 0 0; color: {P['hero_sub']}; font-size: .95rem; }}
+.kpi {{ background: {P['card']}; border: 1px solid {P['border']}; border-radius: 12px; padding: 14px 16px; height: 100%; }}
+.kpi .l {{ color: {P['muted']}; font-size: .78rem; }}
+.kpi .v {{ color: {P['ink']}; font-size: 1.45rem; font-weight: 700; margin-top: 2px; }}
+.kpi .s {{ font-size: .8rem; margin-top: 2px; color: {P['muted']}; }}
 .pill {{ display:inline-block; padding: 3px 12px; border-radius: 999px; font-weight: 600; font-size: .9rem; }}
-.buy {{ background:#d9f3ee; color:#0a6b5d; }} .sell {{ background:#fde1e5; color:#a3243a; }}
-.hold {{ background:#e9eef3; color:#41566b; }}
+.buy {{ background:{P['buy_bg']}; color:{P['buy_fg']}; }}
+.sell {{ background:{P['sell_bg']}; color:{P['sell_fg']}; }}
+.hold {{ background:{P['hold_bg']}; color:{P['hold_fg']}; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,7 +177,7 @@ def build_chart(r, ticker, show):
         increasing_line_color=UP, increasing_fillcolor=UP,
         decreasing_line_color=DOWN, decreasing_fillcolor=DOWN, name="Price"), row=1, col=1)
 
-    palette = {30: "#1976d2", 50: "#f9a825", 124: "#8e24aa", 200: "#e65100"}
+    palette = P["dma"]
     for n in (30, 50, 124, 200):
         if show.get(f"{n} DMA"):
             s = r["dma_series"][n].dropna()
@@ -143,7 +188,7 @@ def build_chart(r, ticker, show):
     if show.get("CAR"):
         c = r["car"].reindex(idx).dropna()
         fig.add_trace(go.Scatter(x=c.index, y=c, name="CAR", mode="lines",
-                                 line=dict(color="#111", width=2.4),
+                                 line=dict(color=P["car"], width=2.4),
                                  hovertemplate="CAR: %{y:.2f}<extra></extra>"), row=1, col=1)
         fig.add_shape(type="line", x0=r["high_date"], x1=r["high_date"], yref="paper", y0=0, y1=1,
                       line=dict(color=MUTED, width=1, dash="dash"))
@@ -153,13 +198,13 @@ def build_chart(r, ticker, show):
     if show.get("Signals"):
         sg = r["signals"].dropna()
         sg = sg[sg != "HOLD"]
-        for key, color, sym, nm in (("BUY", "#2e7d32", "triangle-up", "BUY signal"),
-                                    ("SELL", "#c62828", "triangle-down", "SELL signal")):
+        for key, color, sym, nm in (("BUY", P["mk_buy"], "triangle-up", "BUY signal"),
+                                    ("SELL", P["mk_sell"], "triangle-down", "SELL signal")):
             m = sg[sg.str.upper().str.contains(key)]
             if not m.empty:
                 fig.add_trace(go.Scatter(
                     x=m.index, y=ohlc.loc[m.index, "Low"] * 0.985, mode="markers", name=nm,
-                    marker=dict(symbol=sym, size=13, color=color, line=dict(color="#fff", width=1)),
+                    marker=dict(symbol=sym, size=13, color=color, line=dict(color=P["bg"], width=1)),
                     text=m.values, hovertemplate="%{text}<br>%{x|%d %b %Y}<extra></extra>"), row=1, col=1)
 
     if "Volume" in ohlc.columns:
@@ -168,26 +213,28 @@ def build_chart(r, ticker, show):
                              name="Volume", showlegend=False), row=2, col=1)
 
     fig.update_layout(
-        height=640, template="plotly_white", hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10),
+        height=640, template="plotly_dark" if P["mode"] == "dark" else "plotly_white",
+        paper_bgcolor=P["bg"], plot_bgcolor=P["bg"], font=dict(color=P["ink"]), hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10),
         legend=dict(orientation="h", y=1.07, x=0), xaxis_rangeslider_visible=False,
-        title=dict(text=f"{ticker.replace('.NS', '')} · 1Y daily", x=0, font=dict(size=16, color=INK)),
+        title=dict(text=f"{ticker.replace('.NS', '')} · 1Y daily", x=0, font=dict(size=16, color=P["ink"])),
         dragmode="pan")
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True, spikethickness=1)
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True, spikethickness=1, gridcolor=P["grid"])
+    fig.update_yaxes(gridcolor=P["grid"])
     fig.update_xaxes(rangeselector=dict(buttons=[
         dict(count=1, label="1M", step="month", stepmode="backward"),
         dict(count=3, label="3M", step="month", stepmode="backward"),
         dict(count=6, label="6M", step="month", stepmode="backward"),
-        dict(step="all", label="1Y")]), row=1, col=1)
+        dict(step="all", label="1Y")], bgcolor=P["card"], activecolor=P["border"], font=dict(color=P["ink"])), row=1, col=1)
     return fig
 
 
 def ratio_gauge(value):
     fig = go.Figure(go.Indicator(
-        mode="gauge+number", value=value, number=dict(valueformat=".3f", font=dict(size=30, color=INK)),
-        gauge=dict(axis=dict(range=[0.4, 1.6]), bar=dict(color=INK, thickness=0.25),
-                   steps=[dict(range=[0.4, 0.91], color="#cfeee8"), dict(range=[0.91, 1.09], color="#eef2f6"),
-                          dict(range=[1.09, 1.6], color="#fbd9de")])))
-    fig.update_layout(height=210, margin=dict(l=20, r=20, t=20, b=0))
+        mode="gauge+number", value=value, number=dict(valueformat=".3f", font=dict(size=30, color=P["ink"])),
+        gauge=dict(axis=dict(range=[0.4, 1.6], tickcolor=P["muted"]), bar=dict(color=P["ink"], thickness=0.25), bgcolor=P["card"], bordercolor=P["border"],
+                   steps=[dict(range=[0.4, 0.91], color=P["g_buy"]), dict(range=[0.91, 1.09], color=P["g_hold"]),
+                          dict(range=[1.09, 1.6], color=P["g_sell"])])))
+    fig.update_layout(height=210, margin=dict(l=20, r=20, t=20, b=0), paper_bgcolor="rgba(0,0,0,0)", font=dict(color=P["ink"]))
     return fig
 
 
