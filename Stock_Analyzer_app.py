@@ -262,4 +262,236 @@ def analyze_stock(ticker, as_of_date=None):
     dma_124 = float(dma_124_series.iloc[-1])
     dma_200 = float(dma_200_series.iloc[-1])
 
-    chart_ohlc = data[["Open",
+    chart_ohlc = data[["Open", "High", "Low", "Close"]].tail(252).copy()
+    chart_dmas = {
+        "30 DMA": dma_30_series.reindex(chart_ohlc.index),
+        "50 DMA": dma_50_series.reindex(chart_ohlc.index),
+        "124 DMA": dma_124_series.reindex(chart_ohlc.index),
+        "200 DMA": dma_200_series.reindex(chart_ohlc.index),
+    }
+
+    current_year = as_of_session.year
+    current_month = as_of_session.month
+
+    if current_month == 1:
+        previous_year = current_year - 1
+        previous_month = 12
+    else:
+        previous_year = current_year
+        previous_month = current_month - 1
+
+    daily_ratio = close_prices / dma_124_series
+    previous_month_mask = (
+        (daily_ratio.index.year == previous_year)
+        & (daily_ratio.index.month == previous_month)
+    )
+    previous_month_ratios = daily_ratio.loc[previous_month_mask].dropna()
+
+    if previous_month_ratios.empty:
+        return None, "Unable to calculate the previous month's average CMP / 124 DMA."
+
+    monthly_average_ratio = float(previous_month_ratios.mean())
+    valuation_signal = get_valuation_signal(monthly_average_ratio)
+
+    last_1y_data = data.tail(252)
+    high_series = last_1y_data["High"].squeeze()
+    high_date = high_series.idxmax()
+    car_data = close_prices.loc[high_date:]
+    car_series = car_data.expanding().mean()
+
+    if len(car_data) < 10:
+        return {
+            "mode": "valuation_only",
+            "Date": as_of_session.strftime("%d-%m-%Y"),
+            "Selected Date": as_of_date.strftime("%d-%m-%Y"),
+            "Stock": ticker.replace(".NS", ""),
+            "Ticker": ticker,
+            "Current CMP / 124 DMA": round(cmp / dma_124, 4),
+            "Previous Month Avg CMP / 124 DMA": round(monthly_average_ratio, 4),
+            "Valuation Signal": valuation_signal,
+            "Valuation Month": f"{previous_year}-{previous_month:02d}",
+            "Trading Days Used": len(previous_month_ratios),
+            "chart_ohlc": chart_ohlc,
+            "chart_dmas": chart_dmas,
+            "chart_car": car_series,
+            "high_date": high_date,
+        }, None
+
+    last_10_car = car_series.tail(10)
+    car_status = "Positive" if last_10_car.is_monotonic_increasing else "Negative"
+    dist_200_dma = ((cmp - dma_200) / dma_200) * 100
+
+    breakout = (
+        (cmp > dma_30)
+        and (cmp > dma_50)
+        and (cmp > dma_200)
+        and (car_status == "Positive")
+    )
+    action = "🟢 Positive Breakout" if breakout else "🔴 Avoid/Hold"
+
+    return {
+        "mode": "full",
+        "Date": as_of_session.strftime("%d-%m-%Y"),
+        "Selected Date": as_of_date.strftime("%d-%m-%Y"),
+        "Stock": ticker.replace(".NS", ""),
+        "Ticker": ticker,
+        "CMP": round(cmp, 2),
+        "30 DMA": round(dma_30, 2),
+        "50 DMA": round(dma_50, 2),
+        "124 DMA": round(dma_124, 2),
+        "Current CMP / 124 DMA": round(cmp / dma_124, 4),
+        "Previous Month Avg CMP / 124 DMA": round(monthly_average_ratio, 4),
+        "Valuation Signal": valuation_signal,
+        "200 DMA": round(dma_200, 2),
+        "200 DMA Dist %": round(dist_200_dma, 2),
+        "CAR Status": car_status,
+        "Action": action,
+        "Valuation Month": f"{previous_year}-{previous_month:02d}",
+        "Trading Days Used": len(previous_month_ratios),
+        "chart_ohlc": chart_ohlc,
+        "chart_dmas": chart_dmas,
+        "chart_car": car_series,
+        "high_date": high_date,
+    }, None
+
+
+# ------------------------------------------------------------
+# Streamlit UI
+# ------------------------------------------------------------
+st.title("📈 Single Stock Breakout & Monthly Valuation Analyzer")
+st.caption("Supports Stocks + Indices (Nifty 50, Bank Nifty, Sensex etc.)")
+
+col1, col2, col3 = st.columns([2, 2, 1])
+
+with col1:
+    stock_input = st.text_input(
+        "Stock / Index Ticker",
+        value="RELIANCE",
+        placeholder="e.g. RELIANCE, TCS, ^NSEI, ^NSEBANK",
+        help="For stocks just type name. For indices use ^NSEI, ^NSEBANK, ^BSESN",
+    )
+
+with col2:
+    as_of = st.date_input(
+        "As-of Date",
+        value=date.today(),
+        max_value=date.today(),
+        help="Weekends/holidays will use the previous trading session.",
+    )
+
+with col3:
+    st.write("")
+    st.write("")
+    analyze_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
+
+st.divider()
+
+if analyze_btn:
+    ticker = stock_input.strip().upper()
+
+    if not ticker:
+        st.error("Please enter a stock or index name.")
+    else:
+        # Only add .NS if it is NOT an index
+        if not ticker.startswith("^") and not ticker.endswith(".NS"):
+            ticker = ticker + ".NS"
+
+        with st.spinner(f"Analyzing {ticker} as of {as_of.strftime('%d-%m-%Y')} ..."):
+            result, error = analyze_stock(ticker, as_of_date=as_of)
+
+        if error:
+            st.error(error)
+        else:
+            session_note = ""
+            if result["Date"] != result["Selected Date"]:
+                session_note = (
+                    f"ℹ️ Selected {result['Selected Date']} was not a trading day. "
+                    f"Using session {result['Date']}."
+                )
+
+            if result["mode"] == "valuation_only":
+                st.subheader("📊 Valuation Signal")
+                st.info(
+                    "CAR status not shown because fewer than 10 trading days "
+                    "have passed since the 52-week high. CAR line is still plotted."
+                )
+                if session_note:
+                    st.info(session_note)
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("As-of Session", result["Date"])
+                c2.metric("Symbol", result["Stock"])
+                c3.metric("Valuation Signal", result["Valuation Signal"])
+
+                st.write(f"**Current CMP / 124 DMA:** {result['Current CMP / 124 DMA']:.4f}")
+                st.write(
+                    f"**Previous Month Avg CMP / 124 DMA:** "
+                    f"{result['Previous Month Avg CMP / 124 DMA']:.4f}"
+                )
+                st.caption(
+                    f"Valuation month used: {result['Valuation Month']} "
+                    f"| Trading days used: {result['Trading Days Used']}"
+                )
+            else:
+                st.subheader("📊 Analysis Result")
+                if session_note:
+                    st.info(session_note)
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("CMP", f"{result['CMP']:.2f}")
+                m2.metric("Valuation Signal", result["Valuation Signal"])
+                m3.metric("CAR Status", result["CAR Status"])
+                m4.metric("Action", result["Action"])
+
+                st.markdown("#### Key Levels")
+                details = {
+                    "Metric": [
+                        "As-of Session",
+                        "30 DMA",
+                        "50 DMA",
+                        "124 DMA",
+                        "200 DMA",
+                        "Current CMP / 124 DMA",
+                        "Previous Month Avg CMP / 124 DMA",
+                        "200 DMA Distance %",
+                        "Valuation Month",
+                        "Trading Days Used",
+                    ],
+                    "Value": [
+                        result["Date"],
+                        f"{result['30 DMA']:.2f}",
+                        f"{result['50 DMA']:.2f}",
+                        f"{result['124 DMA']:.2f}",
+                        f"{result['200 DMA']:.2f}",
+                        f"{result['Current CMP / 124 DMA']:.4f}",
+                        f"{result['Previous Month Avg CMP / 124 DMA']:.4f}",
+                        f"{result['200 DMA Dist %']:.2f}%",
+                        result["Valuation Month"],
+                        result["Trading Days Used"],
+                    ],
+                }
+                st.dataframe(pd.DataFrame(details), hide_index=True, use_container_width=True)
+
+                st.caption(
+                    "📌 Valuation Signal is based on the average of every trading day's "
+                    "CMP / 124 DMA from the **previous month** relative to the as-of date."
+                )
+
+            # Chart (now with signal)
+            st.markdown("### 📈 1-Year Daily Candlestick Chart")
+            st.caption(
+                "Black line = CAR • Dashed line = 52W High • "
+                "Green/Red box = Valuation Signal (only BUY / SELL shown)"
+            )
+            plot_candlestick_chart(
+                result.get("chart_ohlc"),
+                result.get("Ticker", ticker),
+                result["Date"],
+                dma_lines=result.get("chart_dmas"),
+                car_series=result.get("chart_car"),
+                high_date=result.get("high_date"),
+                valuation_signal=result.get("Valuation Signal"),
+            )
+
+st.divider()
+st.caption("Supports Stocks + Indices • Buy/Sell signals shown on chart • Data via Yahoo Finance")
