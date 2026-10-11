@@ -75,6 +75,14 @@ h1, h2, h3 {{ color: {P['ink']}; letter-spacing: -0.01em; }}
 .kpi .l {{ color: {P['muted']}; font-size: .78rem; }}
 .kpi .v {{ color: {P['ink']}; font-size: 1.45rem; font-weight: 700; margin-top: 2px; }}
 .kpi .s {{ font-size: .8rem; margin-top: 2px; color: {P['muted']}; }}
+.co {{ display:flex; align-items:center; gap:16px; background:{P['card']}; border:1px solid {P['border']};
+       border-radius:14px; padding:14px 18px; margin-bottom:14px; }}
+.co img, .co .ini {{ width:56px; height:56px; border-radius:12px; flex:none; }}
+.co img {{ object-fit:contain; background:#fff; padding:6px; border:1px solid {P['border']}; box-sizing:border-box; }}
+.co .ini {{ display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.2rem;
+           color:#fff; background:linear-gradient(135deg,{P['hero1']},{P['hero2']}); }}
+.co .n {{ color:{P['ink']}; font-size:1.35rem; font-weight:700; line-height:1.2; }}
+.co .m {{ color:{P['muted']}; font-size:.85rem; margin-top:3px; }}
 .pill {{ display:inline-block; padding: 3px 12px; border-radius: 999px; font-weight: 600; font-size: .9rem; }}
 .buy {{ background:{P['buy_bg']}; color:{P['buy_fg']}; }}
 .sell {{ background:{P['sell_bg']}; color:{P['sell_fg']}; }}
@@ -112,6 +120,40 @@ def load_data(ticker, start, end):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df.sort_index()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_company(ticker):
+    """Full name, logo URL and basic profile (best effort; Yahoo may omit fields)."""
+    info = {}
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        pass
+    base = ticker.replace(".NS", "").lstrip("^")
+    name = info.get("longName") or info.get("shortName") or base
+    logo = info.get("logo_url") or ""
+    site = info.get("website") or ""
+    if not logo and site:
+        from urllib.parse import urlparse
+        host = urlparse(site if "//" in site else "//" + site).netloc.replace("www.", "")
+        if host:
+            logo = f"https://www.google.com/s2/favicons?domain={host}&sz=128"
+    bits = [info.get("sector"), info.get("industry"), info.get("exchange")]
+    return {"name": name, "logo": logo, "site": site,
+            "meta": " · ".join(b for b in bits if b), "ok": bool(info.get("longName") or info.get("shortName"))}
+
+
+def company_header(ticker):
+    c = get_company(ticker)
+    import html as _h
+    nm = _h.escape(c["name"])
+    ini = _h.escape("".join(w[0] for w in c["name"].replace("&", " ").split()[:2]).upper() or "?")
+    badge = (f'<img src="{_h.escape(c["logo"])}" alt="{nm} logo">') if c["logo"] else f'<div class="ini">{ini}</div>'
+    sym = ticker.replace(".NS", "")
+    meta = f'{sym}' + (f' · {_h.escape(c["meta"])}' if c["meta"] else "")
+    st.markdown(f'<div class="co">{badge}<div><div class="n">{nm}</div><div class="m">{meta}</div></div></div>',
+                unsafe_allow_html=True)
 
 
 def analyze_stock(ticker, as_of_date):
@@ -338,6 +380,7 @@ sess = r["session"].strftime("%d-%m-%Y")
 if sess != as_of.strftime("%d-%m-%Y"):
     st.info(f"{as_of.strftime('%d-%m-%Y')} was not a trading day. Using session {sess}.")
 
+company_header(ticker)
 k = st.columns(4)
 kpi(k[0], "Last price", f"{r['cmp']:,.2f}", f"Session {sess}")
 kpi(k[1], "Valuation signal", pill(r["signal"]), f"Based on {r['val_month']} ({r['days_used']} days)")
@@ -360,6 +403,8 @@ with tab1:
     if rb is not None:
         st.divider()
         st.subheader(f"Benchmark · {bench_name}")
+        if not bench_ticker.startswith("^"):
+            company_header(bench_ticker)
         b = st.columns(3)
         kpi(b[0], "Benchmark level", f"{rb['cmp']:,.2f}", bench_ticker)
         kpi(b[1], "Valuation signal", pill(rb["signal"]), f"Based on {rb['val_month']} ({rb['days_used']} days)")
