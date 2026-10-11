@@ -166,9 +166,48 @@ def analyze_stock(ticker, as_of_date):
 
 
 # ------------------------------------------------------------
+# Benchmarks
+# ------------------------------------------------------------
+BENCH = {
+    "Nifty 50": "^NSEI", "Sensex": "^BSESN", "Nifty 500": "^CRSLDX", "Nifty Bank": "^NSEBANK",
+    "Nifty IT": "^CNXIT", "Nifty Auto": "^CNXAUTO", "Nifty Pharma": "^CNXPHARMA",
+    "Nifty FMCG": "^CNXFMCG", "Nifty Metal": "^CNXMETAL", "Nifty Energy": "^CNXENERGY",
+    "Nifty Fin Services": "^CNXFIN",
+}
+_SECTOR = {
+    "Nifty Bank": "HDFCBANK ICICIBANK SBIN KOTAKBANK AXISBANK INDUSINDBK BANKBARODA PNB FEDERALBNK IDFCFIRSTB AUBANK",
+    "Nifty IT": "TCS INFY WIPRO HCLTECH TECHM LTIM PERSISTENT COFORGE MPHASIS",
+    "Nifty Auto": "MARUTI M&M TATAMOTORS BAJAJ-AUTO EICHERMOT HEROMOTOCO TVSMOTOR ASHOKLEY",
+    "Nifty Pharma": "SUNPHARMA DRREDDY CIPLA DIVISLAB LUPIN AUROPHARMA TORNTPHARM",
+    "Nifty FMCG": "HINDUNILVR ITC NESTLEIND BRITANNIA DABUR GODREJCP TATACONSUM MARICO",
+    "Nifty Metal": "TATASTEEL JSWSTEEL HINDALCO VEDL JINDALSTEL SAIL NMDC",
+    "Nifty Energy": "RELIANCE ONGC NTPC POWERGRID BPCL IOC COALINDIA TATAPOWER ADANIGREEN",
+    "Nifty Fin Services": "BAJFINANCE BAJAJFINSV HDFCLIFE SBILIFE CHOLAFIN SHRIRAMFIN",
+}
+SECTOR_OF = {sym: name for name, syms in _SECTOR.items() for sym in syms.split()}
+
+
+def resolve_benchmark(ticker, choice, custom):
+    """Return (benchmark_ticker, display_name)."""
+    if choice == "Custom…":
+        t = custom.strip().upper()
+        if t and not t.startswith("^") and not t.endswith(".NS"):
+            t += ".NS"
+        return (t or None), t
+    if choice != "Auto (best match)":
+        return BENCH[choice], choice
+    base = ticker.replace(".NS", "")
+    if ticker.startswith("^"):                      # index -> compare with the broad market
+        name = "Sensex" if ticker == "^NSEI" else "Nifty 50"
+    else:                                           # stock -> its sector index, else Nifty 50
+        name = SECTOR_OF.get(base, "Nifty 50")
+    return BENCH[name], name
+
+
+# ------------------------------------------------------------
 # Charts
 # ------------------------------------------------------------
-def build_chart(r, ticker, show):
+def build_chart(r, ticker, show, label=None):
     ohlc, idx = r["ohlc"], r["ohlc"].index
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.78, 0.22], vertical_spacing=0.03)
 
@@ -192,7 +231,7 @@ def build_chart(r, ticker, show):
                                  hovertemplate="CAR: %{y:.2f}<extra></extra>"), row=1, col=1)
         fig.add_shape(type="line", x0=r["high_date"], x1=r["high_date"], yref="paper", y0=0, y1=1,
                       line=dict(color=MUTED, width=1, dash="dash"))
-        fig.add_annotation(x=r["high_date"], yref="paper", y=1.02, text="52W high", showarrow=False,
+        fig.add_annotation(x=r["high_date"], yref="paper", y=0.99, yanchor="top", xanchor="left", text=" 52W high", showarrow=False,
                            font=dict(size=10, color=MUTED))
 
     if show.get("Signals"):
@@ -214,13 +253,15 @@ def build_chart(r, ticker, show):
 
     fig.update_layout(
         height=640, template="plotly_dark" if P["mode"] == "dark" else "plotly_white",
-        paper_bgcolor=P["bg"], plot_bgcolor=P["bg"], font=dict(color=P["ink"]), hovermode="x unified", margin=dict(l=10, r=10, t=30, b=10),
-        legend=dict(orientation="h", y=1.07, x=0), xaxis_rangeslider_visible=False,
-        title=dict(text=f"{ticker.replace('.NS', '')} · 1Y daily", x=0, font=dict(size=16, color=P["ink"])),
+        paper_bgcolor=P["bg"], plot_bgcolor=P["bg"], font=dict(color=P["ink"]), hovermode="x unified", margin=dict(l=10, r=10, t=105, b=85),
+        legend=dict(orientation="h", x=0, y=-0.09, xanchor="left", yanchor="top"),
+        xaxis_rangeslider_visible=False,
+        title=dict(text=f"{label or ticker.replace('.NS', '')} · 1Y daily", x=0, xanchor="left", y=0.975, yanchor="top",
+                   font=dict(size=16, color=P["ink"])),
         dragmode="pan")
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True, spikethickness=1, gridcolor=P["grid"])
     fig.update_yaxes(gridcolor=P["grid"])
-    fig.update_xaxes(rangeselector=dict(buttons=[
+    fig.update_xaxes(rangeselector=dict(x=0, y=1.0, xanchor="left", yanchor="bottom", buttons=[
         dict(count=1, label="1M", step="month", stepmode="backward"),
         dict(count=3, label="3M", step="month", stepmode="backward"),
         dict(count=6, label="6M", step="month", stepmode="backward"),
@@ -257,6 +298,9 @@ with st.sidebar:
                               help="Type a name for NSE stocks. Use ^NSEI, ^NSEBANK, ^BSESN for indices.")
     as_of = st.date_input("As-of date", value=date.today(), max_value=date.today(),
                           help="Weekends and holidays use the previous trading session.")
+    bench_choice = st.selectbox("Benchmark", ["Auto (best match)"] + list(BENCH) + ["Custom…"],
+                                help="Auto uses the stock's sector index (Nifty 50 if unknown).")
+    bench_custom = st.text_input("Custom benchmark ticker", placeholder="e.g. ^CNXIT") if bench_choice == "Custom…" else ""
     st.subheader("Chart layers")
     show = {k: st.checkbox(k, value=v) for k, v in
             {"30 DMA": True, "50 DMA": True, "124 DMA": False, "200 DMA": True, "CAR": True, "Signals": True}.items()}
@@ -284,6 +328,12 @@ if err:
     st.error(err)
     st.stop()
 
+bench_ticker, bench_name = resolve_benchmark(ticker, bench_choice, bench_custom)
+rb, errb = None, None
+if bench_ticker and bench_ticker != ticker:
+    with st.spinner(f"Loading benchmark {bench_name}…"):
+        rb, errb = analyze_stock(bench_ticker, as_of)
+
 sess = r["session"].strftime("%d-%m-%Y")
 if sess != as_of.strftime("%d-%m-%Y"):
     st.info(f"{as_of.strftime('%d-%m-%Y')} was not a trading day. Using session {sess}.")
@@ -303,9 +353,24 @@ st.write("")
 tab1, tab2, tab3 = st.tabs(["Chart", "Levels & valuation", "Signal history"])
 
 with tab1:
-    st.plotly_chart(build_chart(r, ticker, show), use_container_width=True,
-                    config={"displaylogo": False, "scrollZoom": True})
+    cfg = {"displaylogo": False, "scrollZoom": True}
+    st.plotly_chart(build_chart(r, ticker, show), use_container_width=True, config=cfg, key="stock_chart")
     st.caption("Drag to pan, scroll to zoom, double-click to reset. Triangles mark the first trading day of a month.")
+
+    if rb is not None:
+        st.divider()
+        st.subheader(f"Benchmark · {bench_name}")
+        b = st.columns(3)
+        kpi(b[0], "Benchmark level", f"{rb['cmp']:,.2f}", bench_ticker)
+        kpi(b[1], "Valuation signal", pill(rb["signal"]), f"Based on {rb['val_month']} ({rb['days_used']} days)")
+        kpi(b[2], "Distance from 200 DMA", f"{rb['dist200']:+.2f}%", f"CMP / 124 DMA: {rb['ratio_now']:.3f}")
+        st.write("")
+        st.plotly_chart(build_chart(rb, bench_ticker, show, f"{bench_name} ({bench_ticker})"),
+                        use_container_width=True, config=cfg, key="bench_chart")
+    elif errb:
+        st.warning(f"Benchmark {bench_name} ({bench_ticker}) could not be loaded: {errb}")
+    elif bench_ticker == ticker:
+        st.caption("The selected benchmark is the same as the ticker, so no separate benchmark chart is shown.")
 
 with tab2:
     a, b = st.columns([1, 1.3])
