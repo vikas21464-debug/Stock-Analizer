@@ -122,6 +122,34 @@ def load_data(ticker, start, end):
     return df.sort_index()
 
 
+# ------------------------------------------------------------
+# Logos: try several public sources, validate server-side, embed as base64
+# ------------------------------------------------------------
+def _logo_sources(domain):
+    return [
+        f"https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://{domain}&size=256",
+        f"https://www.google.com/s2/favicons?domain={domain}&sz=256",
+        f"https://icons.duckduckgo.com/ip3/{domain}.ico",
+        f"https://{domain}/favicon.ico",
+    ]
+
+
+@st.cache_data(ttl=7 * 86400, show_spinner=False)
+def fetch_logo(domain, yahoo_logo=""):
+    """Return a data: URI for the best logo found, or ''. Embedding avoids hot-link/CORS problems."""
+    import base64, requests
+    urls = ([yahoo_logo] if yahoo_logo else []) + (_logo_sources(domain) if domain else [])
+    for u in urls:
+        try:
+            r = requests.get(u, timeout=4, headers={"User-Agent": "Mozilla/5.0"})
+            ct = r.headers.get("content-type", "").split(";")[0].strip().lower()
+            if r.status_code == 200 and ct.startswith("image/") and len(r.content) > 800:
+                return f"data:{ct};base64," + base64.b64encode(r.content).decode()
+        except Exception:
+            continue
+    return ""
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_company(ticker):
     """Full name, logo URL and basic profile (best effort; Yahoo may omit fields)."""
@@ -132,13 +160,12 @@ def get_company(ticker):
         pass
     base = ticker.replace(".NS", "").lstrip("^")
     name = info.get("longName") or info.get("shortName") or base
-    logo = info.get("logo_url") or ""
     site = info.get("website") or ""
-    if not logo and site:
+    domain = ""
+    if site:
         from urllib.parse import urlparse
-        host = urlparse(site if "//" in site else "//" + site).netloc.replace("www.", "")
-        if host:
-            logo = f"https://www.google.com/s2/favicons?domain={host}&sz=128"
+        domain = urlparse(site if "//" in site else "//" + site).netloc.replace("www.", "")
+    logo = fetch_logo(domain, info.get("logo_url") or "") if not ticker.startswith("^") else ""
     bits = [info.get("sector"), info.get("industry"), info.get("exchange")]
     return {"name": name, "logo": logo, "site": site,
             "meta": " · ".join(b for b in bits if b), "ok": bool(info.get("longName") or info.get("shortName"))}
