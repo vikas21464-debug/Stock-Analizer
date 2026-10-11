@@ -123,20 +123,74 @@ def load_data(ticker, start, end):
 
 
 # ------------------------------------------------------------
-# Logos: try several public sources, validate server-side, embed as base64
+# Logos: built-in domain map (fallback when Yahoo has no website) + several public sources,
+# validated server-side and embedded as base64. Failures are never cached, so they retry.
 # ------------------------------------------------------------
+_DOMAINS = """
+RELIANCE ril.com|TCS tcs.com|INFY infosys.com|HDFCBANK hdfcbank.com|ICICIBANK icicibank.com|SBIN sbi.co.in
+BHARTIARTL airtel.in|ITC itcportal.com|LT larsentoubro.com|KOTAKBANK kotak.com|AXISBANK axisbank.com
+HINDUNILVR hul.co.in|BAJFINANCE bajajfinance.in|BAJAJFINSV bajajfinserv.in|MARUTI marutisuzuki.com|M&M mahindra.com
+SUNPHARMA sunpharma.com|TATAMOTORS tatamotors.com|TATASTEEL tatasteel.com|NTPC ntpc.co.in|POWERGRID powergrid.in
+ONGC ongcindia.com|COALINDIA coalindia.in|ULTRACEMCO ultratechcement.com|ASIANPAINT asianpaints.com|TITAN titancompany.in
+NESTLEIND nestle.in|WIPRO wipro.com|HCLTECH hcltech.com|TECHM techmahindra.com|LTIM ltimindtree.com
+ADANIENT adanienterprises.com|ADANIPORTS adaniports.com|ADANIGREEN adanigreenenergy.com|ADANIPOWER adanipower.com
+ADANIENSOL adanienergysolutions.com|ATGL adanigas.com|AWL awlagri.com|JSWSTEEL jsw.in|JSWENERGY jsw.in
+HINDALCO hindalco.com|VEDL vedantalimited.com|GRASIM grasim.com|CIPLA cipla.com|DRREDDY drreddys.com
+DIVISLAB divislabs.com|APOLLOHOSP apollohospitals.com|EICHERMOT eicher.in|BAJAJ-AUTO bajajauto.com
+HEROMOTOCO heromotocorp.com|TVSMOTOR tvsmotor.com|BRITANNIA britannia.co.in|DABUR dabur.com|GODREJCP godrejcp.com
+TATACONSUM tataconsumer.com|MARICO marico.com|INDUSINDBK indusind.com|BANKBARODA bankofbaroda.in|PNB pnbindia.in
+CANBK canarabank.com|FEDERALBNK federalbank.co.in|IDFCFIRSTB idfcfirstbank.com|AUBANK aubank.in|BANDHANBNK bandhanbank.com
+RBLBANK rblbank.com|YESBANK yesbank.in|IDBI idbibank.in|UNIONBANK unionbankofindia.co.in|BANKINDIA bankofindia.co.in
+IOB iob.in|BPCL bharatpetroleum.in|IOC iocl.com|GAIL gailonline.com|HINDPETRO hindustanpetroleum.com
+TATAPOWER tatapower.com|TORNTPOWER torrentpower.com|CESC cesc.co.in|NHPC nhpcindia.com|SJVN sjvn.nic.in
+OIL oil-india.com|PETRONET petronetlng.com|IGL iglonline.net|MGL mahanagargas.com
+HDFCLIFE hdfclife.com|SBILIFE sbilife.co.in|ICICIPRULI iciciprulife.com|ICICIGI icicilombard.com|LICI licindia.in
+NIACL newindia.co.in|GICRE gicre.in|HDFCAMC hdfcfund.com|SBICARD sbicard.com|CHOLAFIN cholamandalam.com
+SHRIRAMFIN shriramfinance.in|MUTHOOTFIN muthootfinance.com|MANAPPURAM manappuram.com|LICHSGFIN lichousing.com
+PFC pfcindia.com|RECLTD recindia.nic.in|IRFC irfc.co.in|POONAWALLA poonawallafincorp.com|ABCAPITAL adityabirlacapital.com
+ANGELONE angelone.in|CDSL cdslindia.com|BSE bseindia.com|MCX mcxindia.com|IEX iexindia.com|CAMS camsonline.com
+KFINTECH kfintech.com|JIOFIN jiofinance.com|BAJAJHLDNG bajajholdings.in|TATAINVEST tatainvestment.com|MFSL maxfinancial.com
+JINDALSTEL jindalsteelpower.com|SAIL sail.co.in|NMDC nmdc.co.in|HINDZINC hzlindia.com|NATIONALUM nalcoindia.com
+HINDCOPPER hindustancopper.com|MOIL moil.nic.in|LUPIN lupin.com|AUROPHARMA aurobindo.com|TORNTPHARM torrentpharma.com
+BIOCON biocon.com|ZYDUSLIFE zyduslife.com|MANKIND mankindpharma.com|MAXHEALTH maxhealthcare.in|GLENMARK glenmarkpharma.com
+ALKEM alkem.com|IPCALAB ipcalabs.com|LAURUSLABS lauruslabs.com|ABBOTINDIA abbott.co.in|SYNGENE syngeneintl.com
+PERSISTENT persistent.com|COFORGE coforge.com|MPHASIS mphasis.com|LTTS ltts.com|KPITTECH kpit.com|OFSS oracle.com
+CYIENT cyient.com|ZENSARTECH zensar.com|BSOFT birlasoft.com|TATAELXSI tataelxsi.com|TATACOMM tatacommunications.com
+ASHOKLEY ashokleyland.com|MOTHERSON motherson.com|BOSCHLTD bosch.in|MRF mrftyres.com|APOLLOTYRE apollotyres.com
+BALKRISIND bkt-tires.com|EXIDEIND exideindustries.com|ESCORTS escortskubota.com|CUMMINSIND cummins.com|SONACOMS sonacomstar.com
+DLF dlf.in|GODREJPROP godrejproperties.com|LODHA lodhagroup.com|OBEROIRLTY oberoirealty.com|PRESTIGE prestigeconstructions.com
+PHOENIXLTD thephoenixmills.com|HAL hal-india.co.in|BEL bel-india.in|BHEL bhel.com|IRCTC irctc.co.in|CONCOR concorindia.com
+ETERNAL eternal.com|ZOMATO eternal.com|NYKAA nykaa.com|PAYTM paytm.com|POLICYBZR policybazaar.com|DMART dmartindia.com
+TRENT trentlimited.com|PIDILITIND pidilite.com|SIEMENS siemens.co.in|ABB abb.com|HAVELLS havells.com|VOLTAS voltas.com
+POLYCAB polycab.com|KEI kei-ind.com|CROMPTON crompton.co.in|WHIRLPOOL whirlpoolindia.com|BLUESTARCO bluestarindia.com
+DIXON dixoninfo.com|ASTRAL astralltd.com|SUPREMEIND supreme.co.in|INDIGO goindigo.in|DELHIVERY delhivery.com
+NAUKRI infoedge.in|INFOEDGE infoedge.in|VBL varunbeverages.com|COLPAL colgatepalmolive.co.in|BERGEPAINT bergerpaints.com
+PAGEIND pageindustries.com|JUBLFOOD jubilantfoodworks.com|DEVYANI devyani.in|MCDOWELL-N diageoindia.com
+UBL unitedbreweries.com|RADICO radicokhaitan.com|AMBUJACEM ambujacement.com|ACC acclimited.com|SHREECEM shreecement.com
+JKCEMENT jkcement.com|DALBHARAT dalmiabharat.com|RAMCOCEM ramcocements.in|UPL upl-ltd.com|PIIND piindustries.com
+TATACHEM tatachemicals.com|SRF srf.com|DEEPAKNTR godeepak.com|COROMANDEL coromandel.biz|CHAMBLFERT chambal.in
+SUNTV sunnetwork.in|ZEEL zee.com|PVRINOX pvrinox.com|IDEA myvi.in|VODAIDEA myvi.in
+"""
+DOMAINS = {}
+for _chunk in _DOMAINS.replace("\n", "|").split("|"):
+    _p = _chunk.split()
+    if len(_p) == 2:
+        DOMAINS[_p[0].upper()] = _p[1]
+
+
 def _logo_sources(domain):
     return [
         f"https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://{domain}&size=256",
         f"https://www.google.com/s2/favicons?domain={domain}&sz=256",
         f"https://icons.duckduckgo.com/ip3/{domain}.ico",
+        f"https://{domain}/apple-touch-icon.png",
         f"https://{domain}/favicon.ico",
     ]
 
 
 @st.cache_data(ttl=7 * 86400, show_spinner=False)
-def fetch_logo(domain, yahoo_logo=""):
-    """Return a data: URI for the best logo found, or ''. Embedding avoids hot-link/CORS problems."""
+def _fetch_logo(domain, yahoo_logo=""):
+    """data: URI of the first valid image. Raises when nothing works, so failures are NOT cached."""
     import base64, requests
     urls = ([yahoo_logo] if yahoo_logo else []) + (_logo_sources(domain) if domain else [])
     for u in urls:
@@ -147,28 +201,41 @@ def fetch_logo(domain, yahoo_logo=""):
                 return f"data:{ct};base64," + base64.b64encode(r.content).decode()
         except Exception:
             continue
-    return ""
+    raise ValueError("no logo")
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
+def _yahoo_info(ticker):
+    """Raises on empty/failed responses so they are retried instead of cached."""
+    info = yf.Ticker(ticker).info or {}
+    if not (info.get("longName") or info.get("shortName")):
+        raise ValueError("empty info")
+    return info
+
+
 def get_company(ticker):
-    """Full name, logo URL and basic profile (best effort; Yahoo may omit fields)."""
-    info = {}
+    """Full name, logo (data URI) and profile line. Best effort; every step has a fallback."""
+    from urllib.parse import urlparse
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = _yahoo_info(ticker)
     except Exception:
-        pass
+        info = {}
     base = ticker.replace(".NS", "").lstrip("^")
     name = info.get("longName") or info.get("shortName") or base
     site = info.get("website") or ""
     domain = ""
     if site:
-        from urllib.parse import urlparse
         domain = urlparse(site if "//" in site else "//" + site).netloc.replace("www.", "")
-    logo = fetch_logo(domain, info.get("logo_url") or "") if not ticker.startswith("^") else ""
+    domain = domain or DOMAINS.get(base.upper(), "")
+    logo = ""
+    if not ticker.startswith("^"):
+        try:
+            logo = _fetch_logo(domain, info.get("logo_url") or "")
+        except Exception:
+            logo = ""
     bits = [info.get("sector"), info.get("industry"), info.get("exchange")]
-    return {"name": name, "logo": logo, "site": site,
-            "meta": " · ".join(b for b in bits if b), "ok": bool(info.get("longName") or info.get("shortName"))}
+    return {"name": name, "logo": logo, "site": site, "meta": " · ".join(b for b in bits if b),
+            "ok": bool(info)}
 
 
 def company_header(ticker):
