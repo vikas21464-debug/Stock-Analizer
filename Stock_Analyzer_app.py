@@ -343,8 +343,16 @@ def resolve_benchmark(ticker, choice, custom):
 # ------------------------------------------------------------
 # Charts
 # ------------------------------------------------------------
-def build_chart(r, ticker, show, label=None):
-    ohlc, idx = r["ohlc"], r["ohlc"].index
+MIN_CANDLES = 15   # keeps the chart readable when the 52-week high is very recent
+
+
+def build_chart(r, ticker, show, label=None, view="1Y"):
+    ohlc = r["ohlc"]
+    start = ohlc.index[0]
+    if view == "HIGH":
+        start = min(pd.Timestamp(r["high_date"]), ohlc.index[-min(MIN_CANDLES, len(ohlc))])
+        ohlc = ohlc.loc[start:]
+    idx = ohlc.index
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.78, 0.22], vertical_spacing=0.03)
 
     fig.add_trace(go.Candlestick(
@@ -355,7 +363,7 @@ def build_chart(r, ticker, show, label=None):
     palette = P["dma"]
     for n in (30, 50, 124, 200):
         if show.get(f"{n} DMA"):
-            s = r["dma_series"][n].dropna()
+            s = r["dma_series"][n].loc[start:].dropna()
             fig.add_trace(go.Scatter(x=s.index, y=s, name=f"{n} DMA", mode="lines",
                                      line=dict(color=palette[n], width=1.6 if n == 200 else 1.2),
                                      hovertemplate=f"{n} DMA: %{{y:.2f}}<extra></extra>"), row=1, col=1)
@@ -371,7 +379,7 @@ def build_chart(r, ticker, show, label=None):
                            font=dict(size=10, color=MUTED))
 
     if show.get("Signals"):
-        sg = r["signals"].dropna()
+        sg = r["signals"].loc[start:].dropna()
         sg = sg[sg != "HOLD"]
         for key, color, sym, nm in (("BUY", P["mk_buy"], "triangle-up", "BUY signal"),
                                     ("SELL", P["mk_sell"], "triangle-down", "SELL signal")):
@@ -392,7 +400,9 @@ def build_chart(r, ticker, show, label=None):
         paper_bgcolor=P["bg"], plot_bgcolor=P["bg"], font=dict(color=P["ink"]), hovermode="x unified", margin=dict(l=10, r=10, t=105, b=85),
         legend=dict(orientation="h", x=0, y=-0.09, xanchor="left", yanchor="top"),
         xaxis_rangeslider_visible=False,
-        title=dict(text=f"{label or ticker.replace('.NS', '')} · 1Y daily", x=0, xanchor="left", y=0.975, yanchor="top",
+        title=dict(text=f"{label or ticker.replace('.NS', '')} · " + (
+                   f"daily since 52W high ({pd.Timestamp(r['high_date']):%d %b %Y}, {len(idx)} sessions)"
+                   if view == "HIGH" else "1Y daily"), x=0, xanchor="left", y=0.975, yanchor="top",
                    font=dict(size=16, color=P["ink"])),
         dragmode="pan")
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True, spikethickness=1, gridcolor=P["grid"])
@@ -401,7 +411,7 @@ def build_chart(r, ticker, show, label=None):
         dict(count=1, label="1M", step="month", stepmode="backward"),
         dict(count=3, label="3M", step="month", stepmode="backward"),
         dict(count=6, label="6M", step="month", stepmode="backward"),
-        dict(step="all", label="1Y")], bgcolor=P["card"], activecolor=P["border"], font=dict(color=P["ink"])), row=1, col=1)
+        dict(step="all", label="All" if view == "HIGH" else "1Y")], bgcolor=P["card"], activecolor=P["border"], font=dict(color=P["ink"])), row=1, col=1)
     return fig
 
 
@@ -437,6 +447,11 @@ with st.sidebar:
     bench_choice = st.selectbox("Benchmark", ["Auto (best match)"] + list(BENCH) + ["Custom…"],
                                 help="Auto uses the stock's sector index (Nifty 50 if unknown).")
     bench_custom = st.text_input("Custom benchmark ticker", placeholder="e.g. ^CNXIT") if bench_choice == "Custom…" else ""
+    st.subheader("Chart range")
+    view_label = st.radio("Show", ["Last 1 year", "From 52-week high"], label_visibility="collapsed",
+                          help="'From 52-week high' starts the chart at the latest 52-week high candle "
+                               "(the same candle where the CAR line begins).")
+    view = "HIGH" if view_label.startswith("From") else "1Y"
     st.subheader("Chart layers")
     show = {k: st.checkbox(k, value=v) for k, v in
             {"30 DMA": True, "50 DMA": True, "124 DMA": False, "200 DMA": True, "CAR": True, "Signals": True}.items()}
@@ -491,8 +506,9 @@ tab1, tab2, tab3 = st.tabs(["Chart", "Levels & valuation", "Signal history"])
 
 with tab1:
     cfg = {"displaylogo": False, "scrollZoom": True}
-    st.plotly_chart(build_chart(r, ticker, show), use_container_width=True, config=cfg, key="stock_chart")
-    st.caption("Drag to pan, scroll to zoom, double-click to reset. Triangles mark the first trading day of a month.")
+    st.plotly_chart(build_chart(r, ticker, show, view=view), use_container_width=True, config=cfg, key="stock_chart")
+    st.caption("Drag to pan, scroll to zoom, double-click to reset. Triangles mark the first trading day of a month."
+               + (" Each chart starts at its own latest 52-week high." if view == "HIGH" else ""))
 
     if rb is not None:
         st.divider()
@@ -504,7 +520,7 @@ with tab1:
         kpi(b[1], "Valuation signal", pill(rb["signal"]), f"Based on {rb['val_month']} ({rb['days_used']} days)")
         kpi(b[2], "Distance from 200 DMA", f"{rb['dist200']:+.2f}%", f"CMP / 124 DMA: {rb['ratio_now']:.3f}")
         st.write("")
-        st.plotly_chart(build_chart(rb, bench_ticker, show, f"{bench_name} ({bench_ticker})"),
+        st.plotly_chart(build_chart(rb, bench_ticker, show, f"{bench_name} ({bench_ticker})", view=view),
                         use_container_width=True, config=cfg, key="bench_chart")
     elif errb:
         st.warning(f"Benchmark {bench_name} ({bench_ticker}) could not be loaded: {errb}")
