@@ -250,11 +250,123 @@ def company_header(ticker):
                 unsafe_allow_html=True)
 
 
+# ------------------------------------------------------------
+# Mutual funds: AMFI NAV data via mfapi.in (free, no key)
+# ------------------------------------------------------------
+MF_API = "https://api.mfapi.in/mf"
+_UA = {"User-Agent": "Mozilla/5.0"}
+_AMC_DOMAINS = [
+    ("parag parikh", "ppfas.com"), ("sbi", "sbimf.com"), ("hdfc", "hdfcfund.com"),
+    ("icici", "icicipruamc.com"), ("nippon", "mf.nipponindiaim.com"), ("axis", "axismf.com"),
+    ("kotak", "kotakmf.com"), ("aditya birla", "mutualfund.adityabirlacapital.com"), ("uti", "utimf.com"),
+    ("mirae", "miraeassetmf.co.in"), ("dsp", "dspim.com"), ("franklin", "franklintempletonindia.com"),
+    ("tata", "tatamutualfund.com"), ("motilal", "motilaloswalmf.com"), ("canara", "canararobeco.com"),
+    ("invesco", "invescomutualfund.com"), ("bandhan", "bandhanmf.com"), ("idfc", "bandhanmf.com"),
+    ("hsbc", "assetmanagement.hsbc.co.in"), ("quantum", "quantumamc.com"), ("quant", "quantmutual.com"),
+    ("pgim", "pgimindiamf.com"), ("sundaram", "sundarammutual.com"), ("mahindra", "mahindramanulife.com"),
+    ("whiteoak", "whiteoakamc.com"), ("navi", "navimutualfund.com"), ("baroda", "barodabnpparibasmf.in"),
+    ("union", "unionmf.com"), ("edelweiss", "edelweissmf.com"), ("samco", "samcomf.com"),
+    ("groww", "growwmf.in"), ("iti", "itiamc.com"), ("bajaj", "bajajamc.com"), ("lic", "licmf.com"),
+    ("jm financial", "jmfinancialmf.com"), ("360 one", "360.one"), ("helios", "heliosmf.in"),
+    ("old bridge", "oldbridgemf.com"), ("trust", "trustmf.com"), ("nj", "njmutualfund.com"),
+    ("zerodha", "zerodhafundhouse.com"), ("shriram", "shriramamc.in"), ("taurus", "taurusmutualfund.com"),
+    ("principal", "principalindia.com"), ("sahara", "saharamutualfund.com"),
+]
+
+
+def amc_domain(text):
+    t = f" {text.lower()} "
+    for kw, dom in _AMC_DOMAINS:
+        if f" {kw} " in t:
+            return dom
+    return ""
+
+
+def is_growth_plan(name):
+    n = name.lower()
+    return "growth" in n and not any(w in n for w in ("idcw", "dividend", "bonus", "payout", "reinvest"))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def mf_search(q):
+    import requests
+    r = requests.get(f"{MF_API}/search", params={"q": q}, timeout=15, headers=_UA)
+    r.raise_for_status()
+    res = r.json()
+    if not isinstance(res, list):
+        raise ValueError("unexpected response")
+    return [{"code": int(x["schemeCode"]), "name": str(x["schemeName"]).strip()}
+            for x in res if x.get("schemeCode") and x.get("schemeName")]
+
+
+def parse_nav(payload):
+    """mfapi payload -> (DataFrame with Open/High/Low/Close = NAV, meta dict)."""
+    meta = payload.get("meta") or {}
+    df = pd.DataFrame(payload.get("data") or [])
+    if df.empty or not {"date", "nav"} <= set(df.columns):
+        raise ValueError("no NAV data")
+    df["date"] = pd.to_datetime(df["date"], format="%d-%m-%Y", errors="coerce")
+    df["nav"] = pd.to_numeric(df["nav"], errors="coerce")
+    df = df.dropna(subset=["date", "nav"])
+    df = df[df["nav"] > 0].drop_duplicates("date").set_index("date").sort_index()
+    if df.empty:
+        raise ValueError("no NAV data")
+    nav = df["nav"].astype(float)
+    return pd.DataFrame({"Open": nav, "High": nav, "Low": nav, "Close": nav}), meta
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_fund(code):
+    import requests
+    r = requests.get(f"{MF_API}/{int(code)}", timeout=20, headers=_UA)
+    r.raise_for_status()
+    return parse_nav(r.json())
+
+
+def analyze_fund(code, as_of_date):
+    try:
+        data, meta = load_fund(code)
+    except Exception:
+        return None, None, (f"Could not load NAV data for scheme code {code}. "
+                            "Check the code, or try again in a minute.")
+    data = data.loc[data.index >= pd.Timestamp(as_of_date - timedelta(days=900))]
+    if data.empty:
+        return None, meta, "This fund has no NAV data in the last 900 days."
+    r, err = analyze_data(data, as_of_date, fund=True)
+    if err and err.startswith("Not enough history"):
+        err = "Not enough NAV history to calculate the 200 DMA as of this date (the fund needs about 200 trading days)."
+    return r, meta, err
+
+
+def fund_header(meta, code, fallback_name=""):
+    import html as _h
+    name = meta.get("scheme_name") or fallback_name or f"Scheme {code}"
+    house = meta.get("fund_house") or ""
+    logo = ""
+    dom = amc_domain(house or name)
+    if dom:
+        try:
+            logo = _fetch_logo(dom, "")
+        except Exception:
+            logo = ""
+    ini = _h.escape("".join(w[0] for w in (house or name).replace("&", " ").split()[:2]).upper() or "MF")
+    badge = f'<img src="{_h.escape(logo)}" alt="logo">' if logo else f'<div class="ini">{ini}</div>'
+    bits = [house, meta.get("scheme_category") or meta.get("scheme_type"), f"Scheme code {code}"]
+    st.markdown(f'<div class="co">{badge}<div><div class="n">{_h.escape(name)}</div>'
+                f'<div class="m">{_h.escape(" · ".join(b for b in bits if b))}</div></div></div>',
+                unsafe_allow_html=True)
+
+
 def analyze_stock(ticker, as_of_date):
     start = as_of_date - timedelta(days=900)
     data = load_data(ticker, start.strftime("%Y-%m-%d"), (as_of_date + timedelta(days=1)).strftime("%Y-%m-%d"))
     if data.empty:
         return None, "No data found for this stock/index."
+    return analyze_data(data, as_of_date)
+
+
+def analyze_data(data, as_of_date, fund=False):
+    """Core analysis on a daily price (or NAV) table with Open/High/Low/Close columns."""
     data = data.loc[data.index.normalize() <= pd.Timestamp(as_of_date)]
     if data.empty:
         return None, "No trading data on or before the selected date."
@@ -292,52 +404,13 @@ def analyze_stock(ticker, as_of_date):
         "dist200": (cmp - float(dma[200].iloc[-1])) / float(dma[200].iloc[-1]) * 100,
         "ohlc": data.tail(252).copy(), "dma_series": {n: s.reindex(last1y.index) for n, s in dma.items()},
         "car": car, "high_date": high_date, "signals": sig.reindex(last1y.index),
-        "car_status": None, "breakout": None,
+        "car_status": None, "breakout": None, "fund": fund,
     }
     if len(car) >= 10:
         out["car_status"] = "Positive" if car.tail(10).is_monotonic_increasing else "Negative"
         out["breakout"] = (cmp > out["dma"][30] and cmp > out["dma"][50] and cmp > out["dma"][200]
                            and out["car_status"] == "Positive")
     return out, None
-
-
-# ------------------------------------------------------------
-# Benchmarks
-# ------------------------------------------------------------
-BENCH = {
-    "Nifty 50": "^NSEI", "Sensex": "^BSESN", "Nifty 500": "^CRSLDX", "Nifty Bank": "^NSEBANK",
-    "Nifty IT": "^CNXIT", "Nifty Auto": "^CNXAUTO", "Nifty Pharma": "^CNXPHARMA",
-    "Nifty FMCG": "^CNXFMCG", "Nifty Metal": "^CNXMETAL", "Nifty Energy": "^CNXENERGY",
-    "Nifty Fin Services": "^CNXFIN",
-}
-_SECTOR = {
-    "Nifty Bank": "HDFCBANK ICICIBANK SBIN KOTAKBANK AXISBANK INDUSINDBK BANKBARODA PNB FEDERALBNK IDFCFIRSTB AUBANK",
-    "Nifty IT": "TCS INFY WIPRO HCLTECH TECHM LTIM PERSISTENT COFORGE MPHASIS",
-    "Nifty Auto": "MARUTI M&M TATAMOTORS BAJAJ-AUTO EICHERMOT HEROMOTOCO TVSMOTOR ASHOKLEY",
-    "Nifty Pharma": "SUNPHARMA DRREDDY CIPLA DIVISLAB LUPIN AUROPHARMA TORNTPHARM",
-    "Nifty FMCG": "HINDUNILVR ITC NESTLEIND BRITANNIA DABUR GODREJCP TATACONSUM MARICO",
-    "Nifty Metal": "TATASTEEL JSWSTEEL HINDALCO VEDL JINDALSTEL SAIL NMDC",
-    "Nifty Energy": "RELIANCE ONGC NTPC POWERGRID BPCL IOC COALINDIA TATAPOWER ADANIGREEN",
-    "Nifty Fin Services": "BAJFINANCE BAJAJFINSV HDFCLIFE SBILIFE CHOLAFIN SHRIRAMFIN",
-}
-SECTOR_OF = {sym: name for name, syms in _SECTOR.items() for sym in syms.split()}
-
-
-def resolve_benchmark(ticker, choice, custom):
-    """Return (benchmark_ticker, display_name)."""
-    if choice == "Custom…":
-        t = custom.strip().upper()
-        if t and not t.startswith("^") and not t.endswith(".NS"):
-            t += ".NS"
-        return (t or None), t
-    if choice != "Auto (best match)":
-        return BENCH[choice], choice
-    base = ticker.replace(".NS", "")
-    if ticker.startswith("^"):                      # index -> compare with the broad market
-        name = "Sensex" if ticker == "^NSEI" else "Nifty 50"
-    else:                                           # stock -> its sector index, else Nifty 50
-        name = SECTOR_OF.get(base, "Nifty 50")
-    return BENCH[name], name
 
 
 # ------------------------------------------------------------
@@ -353,12 +426,20 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
         start = min(pd.Timestamp(r["high_date"]), ohlc.index[-min(MIN_CANDLES, len(ohlc))])
         ohlc = ohlc.loc[start:]
     idx = ohlc.index
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.78, 0.22], vertical_spacing=0.03)
+    is_fund = bool(r.get("fund"))
+    has_vol = (not is_fund) and "Volume" in ohlc.columns
+    fig = make_subplots(rows=2 if has_vol else 1, cols=1, shared_xaxes=True,
+                        row_heights=[0.78, 0.22] if has_vol else [1.0], vertical_spacing=0.03)
 
-    fig.add_trace(go.Candlestick(
-        x=idx, open=ohlc["Open"], high=ohlc["High"], low=ohlc["Low"], close=ohlc["Close"],
-        increasing_line_color=UP, increasing_fillcolor=UP,
-        decreasing_line_color=DOWN, decreasing_fillcolor=DOWN, name="Price"), row=1, col=1)
+    if is_fund:
+        fig.add_trace(go.Scatter(x=idx, y=ohlc["Close"], name="NAV", mode="lines",
+                                 line=dict(color=P["ink"], width=1.8),
+                                 hovertemplate="NAV: %{y:.4f}<extra></extra>"), row=1, col=1)
+    else:
+        fig.add_trace(go.Candlestick(
+            x=idx, open=ohlc["Open"], high=ohlc["High"], low=ohlc["Low"], close=ohlc["Close"],
+            increasing_line_color=UP, increasing_fillcolor=UP,
+            decreasing_line_color=DOWN, decreasing_fillcolor=DOWN, name="Price"), row=1, col=1)
 
     palette = P["dma"]
     for n in (30, 50, 124, 200):
@@ -390,7 +471,7 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
                     marker=dict(symbol=sym, size=13, color=color, line=dict(color=P["bg"], width=1)),
                     text=m.values, hovertemplate="%{text}<br>%{x|%d %b %Y}<extra></extra>"), row=1, col=1)
 
-    if "Volume" in ohlc.columns:
+    if has_vol:
         vcol = np.where(ohlc["Close"] >= ohlc["Open"], UP, DOWN)
         fig.add_trace(go.Bar(x=idx, y=ohlc["Volume"], marker_color=vcol, opacity=0.55,
                              name="Volume", showlegend=False), row=2, col=1)
@@ -400,7 +481,7 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
         paper_bgcolor=P["bg"], plot_bgcolor=P["bg"], font=dict(color=P["ink"]), hovermode="x unified", margin=dict(l=10, r=10, t=105, b=85),
         legend=dict(orientation="h", x=0, y=-0.09, xanchor="left", yanchor="top"),
         xaxis_rangeslider_visible=False,
-        title=dict(text=f"{label or ticker.replace('.NS', '')} · " + (
+        title=dict(text=f"{label or ticker.replace('.NS', '')} · " + ("NAV " if is_fund else "") + (
                    f"daily since 52W high ({pd.Timestamp(r['high_date']):%d %b %Y}, {len(idx)} sessions)"
                    if view == "HIGH" else "1Y daily"), x=0, xanchor="left", y=0.975, yanchor="top",
                    font=dict(size=16, color=P["ink"])),
@@ -434,19 +515,44 @@ def kpi(col, label, value, sub=""):
 # UI
 # ------------------------------------------------------------
 st.markdown('<div class="hero"><h1>Breakout & Monthly Valuation Analyzer</h1>'
-            '<p>Stocks and indices · Buy/Sell signals on the first trading day of each month · by Vikas Dhiman</p></div>',
+            '<p>Stocks, indices and mutual funds · Buy/Sell signals on the first trading day of each month · by Vikas Dhiman</p></div>',
             unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Settings")
-    quick = st.selectbox("Quick pick", ["—", "RELIANCE", "TCS", "INFY", "HDFCBANK", "^NSEI", "^NSEBANK", "^BSESN"])
-    ticker_in = st.text_input("Ticker", value="RELIANCE" if quick == "—" else quick,
-                              help="Type a name for NSE stocks. Use ^NSEI, ^NSEBANK, ^BSESN for indices.")
+    mode = st.radio("Analyze", ["Stock / Index", "Mutual fund"], horizontal=True)
+    fund_code, fund_name = None, ""
+    if mode == "Stock / Index":
+        quick = st.selectbox("Quick pick", ["—", "RELIANCE", "TCS", "INFY", "HDFCBANK", "^NSEI", "^NSEBANK", "^BSESN"])
+        ticker_in = st.text_input("Ticker", value="RELIANCE" if quick == "—" else quick,
+                                  help="Type a name for NSE stocks. Use ^NSEI, ^NSEBANK, ^BSESN for indices.")
+    else:
+        mf_q = st.text_input("Search fund", placeholder="e.g. parag parikh flexi cap",
+                             help="Type part of the scheme name and press Enter.")
+        growth_only = st.checkbox("Growth plans only", value=True,
+                                  help="Hides IDCW / dividend plans, whose NAV drops on payouts and distorts the signals.")
+        code_in = st.text_input("Or enter AMFI scheme code", placeholder="e.g. 122639")
+        if code_in.strip().isdigit():
+            fund_code, fund_name = int(code_in.strip()), ""
+        elif len(mf_q.strip()) >= 3:
+            search_failed = False
+            try:
+                found = mf_search(mf_q.strip())
+            except Exception:
+                found, search_failed = [], True
+                st.error("Fund search is unavailable right now. Try again, or enter a scheme code.")
+            if growth_only:
+                found = [x for x in found if is_growth_plan(x["name"])] or found
+            if found:
+                names = {x["code"]: x["name"] for x in found[:100]}
+                fund_code = st.selectbox("Fund", list(names), format_func=lambda c: names[c])
+                fund_name = names[fund_code]
+            elif not search_failed:
+                st.caption("No funds found. Try fewer or different words.")
+        else:
+            st.caption("Type at least 3 letters of the fund name.")
     as_of = st.date_input("As-of date", value=date.today(), max_value=date.today(),
                           help="Weekends and holidays use the previous trading session.")
-    bench_choice = st.selectbox("Benchmark", ["Auto (best match)"] + list(BENCH) + ["Custom…"],
-                                help="Auto uses the stock's sector index (Nifty 50 if unknown).")
-    bench_custom = st.text_input("Custom benchmark ticker", placeholder="e.g. ^CNXIT") if bench_choice == "Custom…" else ""
     st.subheader("Chart range")
     view_label = st.radio("Show", ["Last 1 year", "From 52-week high"], label_visibility="collapsed",
                           help="'From 52-week high' starts the chart at the latest 52-week high candle "
@@ -463,35 +569,45 @@ if run:
     st.session_state.ran = True
 
 if not st.session_state.ran:
-    st.info("Pick a ticker and date in the sidebar, then select **Analyze**.")
+    st.info("Choose Stock / Index or Mutual fund in the sidebar, pick a date, then select **Analyze**.")
     st.stop()
 
-ticker = ticker_in.strip().upper()
-if not ticker:
-    st.error("Enter a stock or index name.")
-    st.stop()
-if not ticker.startswith("^") and not ticker.endswith(".NS"):
-    ticker += ".NS"
-
-with st.spinner(f"Loading {ticker}…"):
-    r, err = analyze_stock(ticker, as_of)
+is_fund = mode == "Mutual fund"
+meta = None
+if not is_fund:
+    ticker = ticker_in.strip().upper()
+    if not ticker:
+        st.error("Enter a stock or index name.")
+        st.stop()
+    if not ticker.startswith("^") and not ticker.endswith(".NS"):
+        ticker += ".NS"
+    with st.spinner(f"Loading {ticker}…"):
+        r, err = analyze_stock(ticker, as_of)
+else:
+    if not fund_code:
+        st.info("Search for a mutual fund in the sidebar and pick one from the list.")
+        st.stop()
+    ticker = str(fund_code)
+    with st.spinner(f"Loading NAV history for scheme {fund_code}…"):
+        r, meta, err = analyze_fund(fund_code, as_of)
 if err:
     st.error(err)
     st.stop()
 
-bench_ticker, bench_name = resolve_benchmark(ticker, bench_choice, bench_custom)
-rb, errb = None, None
-if bench_ticker and bench_ticker != ticker:
-    with st.spinner(f"Loading benchmark {bench_name}…"):
-        rb, errb = analyze_stock(bench_ticker, as_of)
+unit = "NAV" if is_fund else "CMP"
+full_fund_name = ((meta or {}).get("scheme_name") or fund_name or f"Scheme {fund_code}") if is_fund else ""
+chart_label = (full_fund_name if len(full_fund_name) <= 58 else full_fund_name[:55] + "…") if is_fund else None
 
 sess = r["session"].strftime("%d-%m-%Y")
 if sess != as_of.strftime("%d-%m-%Y"):
     st.info(f"{as_of.strftime('%d-%m-%Y')} was not a trading day. Using session {sess}.")
 
-company_header(ticker)
+if is_fund:
+    fund_header(meta or {}, fund_code, fund_name)
+else:
+    company_header(ticker)
 k = st.columns(4)
-kpi(k[0], "Last price", f"{r['cmp']:,.2f}", f"Session {sess}")
+kpi(k[0], "NAV" if is_fund else "Last price", f"{r['cmp']:,.4f}" if is_fund else f"{r['cmp']:,.2f}", f"Session {sess}")
 kpi(k[1], "Valuation signal", pill(r["signal"]), f"Based on {r['val_month']} ({r['days_used']} days)")
 car_txt = r["car_status"] or "n/a"
 kpi(k[2], "CAR status", car_txt, "Last 10 sessions" if r["car_status"] else "Under 10 days since 52W high")
@@ -506,48 +622,32 @@ tab1, tab2, tab3 = st.tabs(["Chart", "Levels & valuation", "Signal history"])
 
 with tab1:
     cfg = {"displaylogo": False, "scrollZoom": True}
-    st.plotly_chart(build_chart(r, ticker, show, view=view), use_container_width=True, config=cfg, key="stock_chart")
+    st.plotly_chart(build_chart(r, ticker, show, label=chart_label, view=view), use_container_width=True,
+                    config=cfg, key="main_chart")
     st.caption("Drag to pan, scroll to zoom, double-click to reset. Triangles mark the first trading day of a month."
-               + (" Each chart starts at its own latest 52-week high." if view == "HIGH" else ""))
-
-    if rb is not None:
-        st.divider()
-        st.subheader(f"Benchmark · {bench_name}")
-        if not bench_ticker.startswith("^"):
-            company_header(bench_ticker)
-        b = st.columns(3)
-        kpi(b[0], "Benchmark level", f"{rb['cmp']:,.2f}", bench_ticker)
-        kpi(b[1], "Valuation signal", pill(rb["signal"]), f"Based on {rb['val_month']} ({rb['days_used']} days)")
-        kpi(b[2], "Distance from 200 DMA", f"{rb['dist200']:+.2f}%", f"CMP / 124 DMA: {rb['ratio_now']:.3f}")
-        st.write("")
-        st.plotly_chart(build_chart(rb, bench_ticker, show, f"{bench_name} ({bench_ticker})", view=view),
-                        use_container_width=True, config=cfg, key="bench_chart")
-    elif errb:
-        st.warning(f"Benchmark {bench_name} ({bench_ticker}) could not be loaded: {errb}")
-    elif bench_ticker == ticker:
-        st.caption("The selected benchmark is the same as the ticker, so no separate benchmark chart is shown.")
+               + (" The chart starts at the latest 52-week high." if view == "HIGH" else ""))
 
 with tab2:
     a, b = st.columns([1, 1.3])
     with a:
-        st.markdown("**CMP / 124 DMA now**")
+        st.markdown(f"**{unit} / 124 DMA now**")
         st.plotly_chart(ratio_gauge(r["ratio_now"]), use_container_width=True, config={"displayModeBar": False})
         st.caption(f"Previous-month average: **{r['ratio_prev']:.4f}**")
     with b:
         d = r["dma"]
         st.dataframe(pd.DataFrame({
             "Metric": ["30 DMA", "50 DMA", "124 DMA", "200 DMA", "Distance from 200 DMA",
-                       "Previous-month avg CMP / 124 DMA", "Valuation month", "Trading days used"],
+                       f"Previous-month avg {unit} / 124 DMA", "Valuation month", "Trading days used"],
             "Value": [f"{d[30]:.2f}", f"{d[50]:.2f}", f"{d[124]:.2f}", f"{d[200]:.2f}",
                       f"{r['dist200']:.2f}%", f"{r['ratio_prev']:.4f}", r["val_month"], r["days_used"]]}),
             hide_index=True, use_container_width=True)
 
 with tab3:
     sg = r["signals"].dropna().rename("Signal").to_frame()
-    sg["Close"] = r["ohlc"].loc[sg.index, "Close"].round(2)
+    sg["NAV" if is_fund else "Close"] = r["ohlc"].loc[sg.index, "Close"].round(4 if is_fund else 2)
     sg.index = sg.index.strftime("%d-%m-%Y")
     sg.index.name = "First trading day"
     st.dataframe(sg.iloc[::-1], use_container_width=True)
     st.download_button("Download CSV", sg.to_csv().encode(), f"{ticker}_signals.csv", "text/csv")
 
-st.caption("Data via Yahoo Finance · For research only, not investment advice.")
+st.caption(("NAV data via mfapi.in (AMFI)" if is_fund else "Data via Yahoo Finance") + " · For research only, not investment advice.")
