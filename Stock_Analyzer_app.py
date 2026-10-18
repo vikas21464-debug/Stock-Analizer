@@ -168,7 +168,6 @@ NAUKRI infoedge.in|INFOEDGE infoedge.in|VBL varunbeverages.com|COLPAL colgatepal
 PAGEIND pageindustries.com|JUBLFOOD jubilantfoodworks.com|DEVYANI devyani.in|MCDOWELL-N diageoindia.com
 UBL unitedbreweries.com|RADICO radicokhaitan.com|AMBUJACEM ambujacement.com|ACC acclimited.com|SHREECEM shreecement.com
 JKCEMENT jkcement.com|DALBHARAT dalmiabharat.com|RAMCOCEM ramcocements.in|UPL upl-ltd.com|PIIND piindustries.com
-TATACHEM tatachemicals.com|SRF srf.com|DEEPAKNTR godeepak.com|COROMANDEL coromandel.biz|CHAMBLFERT chambal.in
 SUNTV sunnetwork.in|ZEEL zee.com|PVRINOX pvrinox.com|IDEA myvi.in|VODAIDEA myvi.in
 """
 DOMAINS = {}
@@ -247,6 +246,45 @@ def company_header(ticker):
     sym = ticker.replace(".NS", "")
     meta = f'{sym}' + (f' · {_h.escape(c["meta"])}' if c["meta"] else "")
     st.markdown(f'<div class="co">{badge}<div><div class="n">{nm}</div><div class="m">{meta}</div></div></div>',
+                unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------
+# Indices (Yahoo Finance tickers). Use "Custom ticker…" in the menu for anything not listed.
+# ------------------------------------------------------------
+INDICES = [  # (group, display name, Yahoo ticker)
+    ("Broad market", "Nifty 50", "^NSEI"), ("Broad market", "Sensex", "^BSESN"),
+    ("Broad market", "Nifty Next 50", "^NSMIDCP"), ("Broad market", "Nifty 100", "^CNX100"),
+    ("Broad market", "Nifty 200", "^CNX200"), ("Broad market", "Nifty 500", "^CRSLDX"),
+    ("Broad market", "Nifty Midcap 50", "^NSEMDCP50"), ("Broad market", "Nifty Midcap 100", "^CNXMIDCAP"),
+    ("Broad market", "Nifty Smallcap 100", "^CNXSC"),
+    ("Broad market", "BSE 100", "BSE-100.BO"), ("Broad market", "BSE 200", "BSE-200.BO"),
+    ("Broad market", "BSE 500", "BSE-500.BO"), ("Broad market", "BSE Midcap", "BSE-MIDCAP.BO"),
+    ("Broad market", "BSE Smallcap", "BSE-SMLCAP.BO"),
+    ("Sector", "Nifty Bank", "^NSEBANK"), ("Sector", "Nifty Financial Services", "^CNXFIN"),
+    ("Sector", "Nifty PSU Bank", "^CNXPSUBANK"), ("Sector", "Nifty IT", "^CNXIT"),
+    ("Sector", "Nifty Auto", "^CNXAUTO"), ("Sector", "Nifty Pharma", "^CNXPHARMA"),
+    ("Sector", "Nifty FMCG", "^CNXFMCG"), ("Sector", "Nifty Metal", "^CNXMETAL"),
+    ("Sector", "Nifty Energy", "^CNXENERGY"), ("Sector", "Nifty Realty", "^CNXREALTY"),
+    ("Sector", "Nifty Media", "^CNXMEDIA"), ("Sector", "Nifty Infrastructure", "^CNXINFRA"),
+    ("Theme", "Nifty PSE", "^CNXPSE"), ("Theme", "Nifty Commodities", "^CNXCMDT"),
+    ("Theme", "Nifty Consumption", "^CNXCONSUM"), ("Theme", "Nifty Services Sector", "^CNXSERVICE"),
+    ("Theme", "Nifty MNC", "^CNXMNC"),
+    ("Global", "S&P 500", "^GSPC"), ("Global", "Nasdaq Composite", "^IXIC"), ("Global", "Dow Jones", "^DJI"),
+    ("Global", "Russell 2000", "^RUT"), ("Global", "FTSE 100", "^FTSE"), ("Global", "DAX", "^GDAXI"),
+    ("Global", "CAC 40", "^FCHI"), ("Global", "Nikkei 225", "^N225"), ("Global", "Hang Seng", "^HSI"),
+    ("Global", "Shanghai Composite", "000001.SS"), ("Global", "KOSPI", "^KS11"),
+    ("Global", "ASX 200", "^AXJO"), ("Global", "Straits Times", "^STI"),
+]
+INDEX_MAP = {name: (group, tick) for group, name, tick in INDICES}
+CUSTOM_INDEX = "Custom ticker…"
+
+
+def index_header(name, ticker, group):
+    import html as _h
+    ini = _h.escape("".join(w[0] for w in name.replace("&", " ").split()[:3]).upper() or "IX")
+    st.markdown(f'<div class="co"><div class="ini">{ini}</div><div><div class="n">{_h.escape(name)}</div>'
+                f'<div class="m">{_h.escape(group)} index · {_h.escape(ticker)}</div></div></div>',
                 unsafe_allow_html=True)
 
 
@@ -427,7 +465,7 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
         ohlc = ohlc.loc[start:]
     idx = ohlc.index
     is_fund = bool(r.get("fund"))
-    has_vol = (not is_fund) and "Volume" in ohlc.columns
+    has_vol = (not is_fund) and "Volume" in ohlc.columns and float(ohlc["Volume"].fillna(0).sum()) > 0   # many indices report no volume
     fig = make_subplots(rows=2 if has_vol else 1, cols=1, shared_xaxes=True,
                         row_heights=[0.78, 0.22] if has_vol else [1.0], vertical_spacing=0.03)
 
@@ -520,12 +558,22 @@ st.markdown('<div class="hero"><h1>Breakout & Monthly Valuation Analyzer</h1>'
 
 with st.sidebar:
     st.header("Settings")
-    mode = st.radio("Analyze", ["Stock / Index", "Mutual fund"], horizontal=True)
+    mode = st.radio("Analyze", ["Stock", "Index", "Mutual fund"], horizontal=True)
     fund_code, fund_name = None, ""
-    if mode == "Stock / Index":
-        quick = st.selectbox("Quick pick", ["—", "RELIANCE", "TCS", "INFY", "HDFCBANK", "^NSEI", "^NSEBANK", "^BSESN"])
-        ticker_in = st.text_input("Ticker", value="RELIANCE" if quick == "—" else quick,
-                                  help="Type a name for NSE stocks. Use ^NSEI, ^NSEBANK, ^BSESN for indices.")
+    ticker_in, index_name, index_group = "", "", ""
+    if mode == "Stock":
+        quick = st.selectbox("Quick pick", ["—", "RELIANCE", "TCS", "INFY", "HDFCBANK"])
+        ticker_in = st.text_input("Stock symbol", value="RELIANCE" if quick == "—" else quick,
+                                  help="Type the NSE symbol, for example RELIANCE. Indices are in the Index menu.")
+    elif mode == "Index":
+        choice = st.selectbox("Index", [n for _, n, _ in INDICES] + [CUSTOM_INDEX],
+                              help="Type in the box to search the list.")
+        if choice == CUSTOM_INDEX:
+            ticker_in = st.text_input("Yahoo Finance ticker", placeholder="e.g. ^NSEI or BSE-500.BO")
+            index_name, index_group = ticker_in.strip().upper(), "Custom"
+        else:
+            index_group, ticker_in = INDEX_MAP[choice]
+            index_name = choice
     else:
         mf_q = st.text_input("Search fund", placeholder="e.g. parag parikh flexi cap",
                              help="Type part of the scheme name and press Enter.")
@@ -569,20 +617,24 @@ if run:
     st.session_state.ran = True
 
 if not st.session_state.ran:
-    st.info("Choose Stock / Index or Mutual fund in the sidebar, pick a date, then select **Analyze**.")
+    st.info("Choose Stock, Index or Mutual fund in the sidebar, pick a date, then select **Analyze**.")
     st.stop()
 
 is_fund = mode == "Mutual fund"
+is_index = mode == "Index"
 meta = None
 if not is_fund:
     ticker = ticker_in.strip().upper()
     if not ticker:
-        st.error("Enter a stock or index name.")
+        st.error("Enter an index ticker." if is_index else "Enter a stock symbol.")
         st.stop()
-    if not ticker.startswith("^") and not ticker.endswith(".NS"):
+    if not is_index and not ticker.startswith("^") and "." not in ticker:
         ticker += ".NS"
-    with st.spinner(f"Loading {ticker}…"):
+    with st.spinner(f"Loading {index_name if is_index else ticker}…"):
         r, err = analyze_stock(ticker, as_of)
+    if err and is_index and err.startswith("No data found"):
+        err = (f"Yahoo Finance has no data for {index_name} ({ticker}) right now. "
+               "Try another index, or choose Custom ticker… and enter a different symbol.")
 else:
     if not fund_code:
         st.info("Search for a mutual fund in the sidebar and pick one from the list.")
@@ -594,9 +646,15 @@ if err:
     st.error(err)
     st.stop()
 
-unit = "NAV" if is_fund else "CMP"
+unit = "NAV" if is_fund else ("Index" if is_index else "CMP")
+price_label = "NAV" if is_fund else ("Index level" if is_index else "Last price")
 full_fund_name = ((meta or {}).get("scheme_name") or fund_name or f"Scheme {fund_code}") if is_fund else ""
-chart_label = (full_fund_name if len(full_fund_name) <= 58 else full_fund_name[:55] + "…") if is_fund else None
+if is_fund:
+    chart_label = full_fund_name if len(full_fund_name) <= 58 else full_fund_name[:55] + "…"
+elif is_index:
+    chart_label = index_name
+else:
+    chart_label = None
 
 sess = r["session"].strftime("%d-%m-%Y")
 if sess != as_of.strftime("%d-%m-%Y"):
@@ -604,10 +662,12 @@ if sess != as_of.strftime("%d-%m-%Y"):
 
 if is_fund:
     fund_header(meta or {}, fund_code, fund_name)
+elif is_index:
+    index_header(index_name, ticker, index_group)
 else:
     company_header(ticker)
 k = st.columns(4)
-kpi(k[0], "NAV" if is_fund else "Last price", f"{r['cmp']:,.4f}" if is_fund else f"{r['cmp']:,.2f}", f"Session {sess}")
+kpi(k[0], price_label, f"{r['cmp']:,.4f}" if is_fund else f"{r['cmp']:,.2f}", f"Session {sess}")
 kpi(k[1], "Valuation signal", pill(r["signal"]), f"Based on {r['val_month']} ({r['days_used']} days)")
 car_txt = r["car_status"] or "n/a"
 kpi(k[2], "CAR status", car_txt, "Last 10 sessions" if r["car_status"] else "Under 10 days since 52W high")
@@ -648,6 +708,6 @@ with tab3:
     sg.index = sg.index.strftime("%d-%m-%Y")
     sg.index.name = "First trading day"
     st.dataframe(sg.iloc[::-1], use_container_width=True)
-    st.download_button("Download CSV", sg.to_csv().encode(), f"{ticker}_signals.csv", "text/csv")
+    st.download_button("Download CSV", sg.to_csv().encode(), f"{ticker.lstrip('^')}_signals.csv", "text/csv")
 
 st.caption(("NAV data via mfapi.in (AMFI)" if is_fund else "Data via Yahoo Finance") + " · For research only, not investment advice.")
