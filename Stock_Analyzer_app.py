@@ -168,6 +168,7 @@ NAUKRI infoedge.in|INFOEDGE infoedge.in|VBL varunbeverages.com|COLPAL colgatepal
 PAGEIND pageindustries.com|JUBLFOOD jubilantfoodworks.com|DEVYANI devyani.in|MCDOWELL-N diageoindia.com
 UBL unitedbreweries.com|RADICO radicokhaitan.com|AMBUJACEM ambujacement.com|ACC acclimited.com|SHREECEM shreecement.com
 JKCEMENT jkcement.com|DALBHARAT dalmiabharat.com|RAMCOCEM ramcocements.in|UPL upl-ltd.com|PIIND piindustries.com
+TATACHEM tatachemicals.com|SRF srf.com|DEEPAKNTR godeepak.com|COROMANDEL coromandel.biz|CHAMBLFERT chambal.in
 SUNTV sunnetwork.in|ZEEL zee.com|PVRINOX pvrinox.com|IDEA myvi.in|VODAIDEA myvi.in
 """
 DOMAINS = {}
@@ -671,11 +672,9 @@ kpi(k[0], price_label, f"{r['cmp']:,.4f}" if is_fund else f"{r['cmp']:,.2f}", f"
 kpi(k[1], "Valuation signal", pill(r["signal"]), f"Based on {r['val_month']} ({r['days_used']} days)")
 car_txt = r["car_status"] or "n/a"
 kpi(k[2], "CAR status", car_txt, "Last 10 sessions" if r["car_status"] else "Under 10 days since 52W high")
-if r["breakout"] is None:
-    kpi(k[3], "Action", "n/a", "Not enough CAR data")
-else:
-    kpi(k[3], "Action", "🟢 Positive breakout" if r["breakout"] else "🔴 Avoid / Hold",
-        f"{r['dist200']:+.2f}% from 200 DMA")
+sig_up = r["signal"].upper()
+action_txt = "🟢 Buy" if "BUY" in sig_up else "🔴 Sell" if "SELL" in sig_up else "🟡 Hold"
+kpi(k[3], "Action", action_txt, f"{r['signal']} · {r['dist200']:+.2f}% from 200 DMA")
 
 st.write("")
 tab1, tab2, tab3 = st.tabs(["Chart", "Levels & valuation", "Signal history"])
