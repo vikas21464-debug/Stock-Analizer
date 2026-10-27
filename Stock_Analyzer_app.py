@@ -553,7 +553,7 @@ def kpi(col, label, value, sub=""):
 # ------------------------------------------------------------
 # UI
 # ------------------------------------------------------------
-st.markdown('<div class="hero"><h1>Breakout & Monthly Valuation Analyzer</h1>'
+st.markdown('<div class="hero"><h1>Monthly Valuation Analyzer</h1>'
             '<p>Stocks, indices and mutual funds · Buy/Sell signals on the first trading day of each month · by Vikas Dhiman</p></div>',
             unsafe_allow_html=True)
 
