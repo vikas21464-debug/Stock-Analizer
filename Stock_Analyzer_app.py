@@ -396,6 +396,66 @@ def fund_header(meta, code, fallback_name=""):
                 unsafe_allow_html=True)
 
 
+def first_day_signals(close, ratio):
+    """Valuation signal on the 1st trading day of each month, from the previous month's average CMP / 124 DMA."""
+    sig = pd.Series(index=close.index, dtype=object)
+    for (yr, mo), g in close.groupby([close.index.year, close.index.month]):
+        yy, mm = (yr - 1, 12) if mo == 1 else (yr, mo - 1)
+        pr = ratio[(ratio.index.year == yy) & (ratio.index.month == mm)].dropna()
+        sig.loc[g.index[0]] = get_valuation_signal(float(pr.mean())) if len(pr) >= 5 else "HOLD"
+    return sig
+
+
+def monthly_view(data, as_of_date, years=5, fund=False):
+    """Monthly candles from daily data. DMAs are the daily averages read at each month-end. No CAR."""
+    data = data.loc[data.index.normalize() <= pd.Timestamp(as_of_date)].dropna(subset=["Close"])
+    if len(data) < 200:
+        return None, "Not enough history to build the monthly chart (about 200 trading days are needed)."
+    close = data["Close"].squeeze()
+    dma = {n: close.rolling(n).mean() for n in (30, 50, 124, 200)}
+    sig = first_day_signals(close, close / dma[124])
+
+    per = data.index.to_period("M")
+    g = data.groupby(per)
+    m = pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(),
+                      "Low": g["Low"].min(), "Close": g["Close"].last()})
+    if "Volume" in data.columns:
+        m["Volume"] = g["Volume"].sum()
+    m.index = m.index.to_timestamp()                       # month start = candle position
+
+    def by_month(series):
+        out = series.groupby(series.index.to_period("M")).last()
+        out.index = out.index.to_timestamp()
+        return out
+
+    sig_m = sig.dropna()
+    sig_m.index = sig_m.index.to_period("M").to_timestamp()
+    sig_m = sig_m[~sig_m.index.duplicated(keep="first")]
+
+    cutoff = m.index[-1] - pd.DateOffset(months=years * 12 - 1)
+    m = m.loc[cutoff:]
+    return {"ohlc": m, "dma_series": {n: by_month(s).reindex(m.index) for n, s in dma.items()},
+            "signals": sig_m.reindex(m.index), "fund": fund, "monthly": True,
+            "session": close.index[-1], "months": len(m)}, None
+
+
+def get_monthly(is_fund, ticker, fund_code, as_of_date, years):
+    """Load enough daily history (plus 200-day warm-up) and build the monthly view."""
+    span = timedelta(days=years * 366 + 330)
+    if is_fund:
+        try:
+            data, _ = load_fund(fund_code)
+        except Exception:
+            return None, "Could not load NAV history for the monthly chart. Try again in a minute."
+        data = data.loc[data.index >= pd.Timestamp(as_of_date - span)]
+    else:
+        start = as_of_date - span
+        data = load_data(ticker, start.strftime("%Y-%m-%d"), (as_of_date + timedelta(days=1)).strftime("%Y-%m-%d"))
+        if data.empty:
+            return None, "No data found for the monthly chart."
+    return monthly_view(data, as_of_date, years, fund=is_fund)
+
+
 def analyze_stock(ticker, as_of_date):
     start = as_of_date - timedelta(days=900)
     data = load_data(ticker, start.strftime("%Y-%m-%d"), (as_of_date + timedelta(days=1)).strftime("%Y-%m-%d"))
@@ -425,11 +485,7 @@ def analyze_data(data, as_of_date, fund=False):
     avg_ratio = float(prev.mean())
 
     # Signals on the 1st trading day of each month
-    sig = pd.Series(index=close.index, dtype=object)
-    for (yr, mo), g in close.groupby([close.index.year, close.index.month]):
-        yy, mm = (yr - 1, 12) if mo == 1 else (yr, mo - 1)
-        pr = ratio[(ratio.index.year == yy) & (ratio.index.month == mm)].dropna()
-        sig.loc[g.index[0]] = get_valuation_signal(float(pr.mean())) if len(pr) >= 5 else "HOLD"
+    sig = first_day_signals(close, ratio)
 
     last1y = data.tail(252)
     high_date = last1y["High"].squeeze().idxmax()
@@ -466,11 +522,13 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
         ohlc = ohlc.loc[start:]
     idx = ohlc.index
     is_fund = bool(r.get("fund"))
+    monthly = bool(r.get("monthly"))
+    use_line = is_fund and not monthly      # monthly funds get real candles (first/high/low/last NAV of the month)
     has_vol = (not is_fund) and "Volume" in ohlc.columns and float(ohlc["Volume"].fillna(0).sum()) > 0   # many indices report no volume
     fig = make_subplots(rows=2 if has_vol else 1, cols=1, shared_xaxes=True,
                         row_heights=[0.78, 0.22] if has_vol else [1.0], vertical_spacing=0.03)
 
-    if is_fund:
+    if use_line:
         fig.add_trace(go.Scatter(x=idx, y=ohlc["Close"], name="NAV", mode="lines",
                                  line=dict(color=P["ink"], width=1.8),
                                  hovertemplate="NAV: %{y:.4f}<extra></extra>"), row=1, col=1)
@@ -488,7 +546,7 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
                                      line=dict(color=palette[n], width=1.6 if n == 200 else 1.2),
                                      hovertemplate=f"{n} DMA: %{{y:.2f}}<extra></extra>"), row=1, col=1)
 
-    if show.get("CAR"):
+    if show.get("CAR") and not monthly:
         c = r["car"].reindex(idx).dropna()
         fig.add_trace(go.Scatter(x=c.index, y=c, name="CAR", mode="lines",
                                  line=dict(color=P["car"], width=2.4),
@@ -504,9 +562,10 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
         for key, color, sym, nm in (("BUY", P["mk_buy"], "triangle-up", "BUY signal"),
                                     ("SELL", P["mk_sell"], "triangle-down", "SELL signal")):
             m = sg[sg.str.upper().str.contains(key)]
+            m = m[m.index.isin(ohlc.index)]
             if not m.empty:
                 fig.add_trace(go.Scatter(
-                    x=m.index, y=ohlc.loc[m.index, "Low"] * 0.985, mode="markers", name=nm,
+                    x=m.index, y=ohlc.loc[m.index, "Low"] * (0.97 if monthly else 0.985), mode="markers", name=nm,
                     marker=dict(symbol=sym, size=13, color=color, line=dict(color=P["bg"], width=1)),
                     text=m.values, hovertemplate="%{text}<br>%{x|%d %b %Y}<extra></extra>"), row=1, col=1)
 
@@ -522,16 +581,23 @@ def build_chart(r, ticker, show, label=None, view="1Y"):
         xaxis_rangeslider_visible=False,
         title=dict(text=f"{label or ticker.replace('.NS', '')} · " + ("NAV " if is_fund else "") + (
                    f"daily since 52W high ({pd.Timestamp(r['high_date']):%d %b %Y}, {len(idx)} sessions)"
-                   if view == "HIGH" else "1Y daily"), x=0, xanchor="left", y=0.975, yanchor="top",
+                   if view == "HIGH" else "monthly" if monthly else "1Y daily"), x=0, xanchor="left", y=0.975, yanchor="top",
                    font=dict(size=16, color=P["ink"])),
         dragmode="pan")
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True, spikethickness=1, gridcolor=P["grid"])
+    fig.update_xaxes(rangebreaks=[] if monthly else [dict(bounds=["sat", "mon"])], showspikes=True, spikethickness=1, gridcolor=P["grid"])
     fig.update_yaxes(gridcolor=P["grid"])
-    fig.update_xaxes(rangeselector=dict(x=0, y=1.0, xanchor="left", yanchor="bottom", buttons=[
-        dict(count=1, label="1M", step="month", stepmode="backward"),
-        dict(count=3, label="3M", step="month", stepmode="backward"),
-        dict(count=6, label="6M", step="month", stepmode="backward"),
-        dict(step="all", label="All" if view == "HIGH" else "1Y")], bgcolor=P["card"], activecolor=P["border"], font=dict(color=P["ink"])), row=1, col=1)
+    if monthly:
+        btns = [dict(count=1, label="1Y", step="year", stepmode="backward"),
+                dict(count=3, label="3Y", step="year", stepmode="backward"),
+                dict(count=5, label="5Y", step="year", stepmode="backward"),
+                dict(step="all", label="All")]
+        fig.update_xaxes(tickformat="%b %Y", hoverformat="%b %Y")
+    else:
+        btns = [dict(count=1, label="1M", step="month", stepmode="backward"),
+                dict(count=3, label="3M", step="month", stepmode="backward"),
+                dict(count=6, label="6M", step="month", stepmode="backward"),
+                dict(step="all", label="All" if view == "HIGH" else "1Y")]
+    fig.update_xaxes(rangeselector=dict(x=0, y=1.0, xanchor="left", yanchor="bottom", buttons=btns, bgcolor=P["card"], activecolor=P["border"], font=dict(color=P["ink"])), row=1, col=1)
     return fig
 
 
@@ -603,10 +669,18 @@ with st.sidebar:
     as_of = st.date_input("As-of date", value=date.today(), max_value=date.today(),
                           help="Weekends and holidays use the previous trading session.")
     st.subheader("Chart range")
-    view_label = st.radio("Show", ["Last 1 year", "From 52-week high"], label_visibility="collapsed",
-                          help="'From 52-week high' starts the chart at the latest 52-week high candle "
-                               "(the same candle where the CAR line begins).")
-    view = "HIGH" if view_label.startswith("From") else "1Y"
+    timeframe = st.radio("Timeframe", ["Daily", "Monthly"], horizontal=True,
+                         help="Monthly shows one candle per month and does not use the CAR line.")
+    monthly = timeframe == "Monthly"
+    view, monthly_years = "1Y", 5
+    if monthly:
+        monthly_years = {"3 years": 3, "5 years": 5, "10 years": 10}[
+            st.selectbox("Monthly history", ["3 years", "5 years", "10 years"], index=1)]
+    else:
+        view_label = st.radio("Show", ["Last 1 year", "From 52-week high"], label_visibility="collapsed",
+                              help="'From 52-week high' starts the chart at the latest 52-week high candle "
+                                   "(the same candle where the CAR line begins).")
+        view = "HIGH" if view_label.startswith("From") else "1Y"
     st.subheader("Chart layers")
     show = {k: st.checkbox(k, value=v) for k, v in
             {"30 DMA": True, "50 DMA": True, "124 DMA": False, "200 DMA": True, "CAR": True, "Signals": True}.items()}
@@ -681,10 +755,22 @@ tab1, tab2, tab3 = st.tabs(["Chart", "Levels & valuation", "Signal history"])
 
 with tab1:
     cfg = {"displaylogo": False, "scrollZoom": True}
-    st.plotly_chart(build_chart(r, ticker, show, label=chart_label, view=view), use_container_width=True,
-                    config=cfg, key="main_chart")
-    st.caption("Drag to pan, scroll to zoom, double-click to reset. Triangles mark the first trading day of a month."
-               + (" The chart starts at the latest 52-week high." if view == "HIGH" else ""))
+    if monthly:
+        with st.spinner("Building monthly candles…"):
+            rm, errm = get_monthly(is_fund, ticker, fund_code, as_of, monthly_years)
+        if errm:
+            st.warning(errm)
+        else:
+            st.plotly_chart(build_chart(rm, ticker, show, label=chart_label), use_container_width=True,
+                            config=cfg, key="monthly_chart")
+            st.caption("One candle per month; the latest candle covers the month to date. Moving averages are the "
+                       "daily averages read at each month-end. Triangles mark the monthly signal. "
+                       "CAR is not used on this chart.")
+    else:
+        st.plotly_chart(build_chart(r, ticker, show, label=chart_label, view=view), use_container_width=True,
+                        config=cfg, key="main_chart")
+        st.caption("Drag to pan, scroll to zoom, double-click to reset. Triangles mark the first trading day of a month."
+                   + (" The chart starts at the latest 52-week high." if view == "HIGH" else ""))
 
 with tab2:
     a, b = st.columns([1, 1.3])
